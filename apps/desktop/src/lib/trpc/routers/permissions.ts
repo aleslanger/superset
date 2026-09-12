@@ -1,102 +1,54 @@
-import fs from "node:fs";
-import { homedir } from "node:os";
-import path from "node:path";
-import { shell, systemPreferences } from "electron";
 import { PLATFORM } from "shared/constants";
 import { publicProcedure, router } from "..";
+import {
+	getPermissionStatus,
+	requestAccessibility,
+	requestAppleEvents,
+	requestFullDiskAccess,
+	requestLocalNetwork,
+	requestMicrophone,
+} from "./permissions/native-permissions";
 
-type PermissionStatus = boolean | "not-applicable";
-
-function checkFullDiskAccess(): PermissionStatus {
-	if (!PLATFORM.IS_MAC) return "not-applicable";
-	try {
-		// Safari bookmarks are TCC-protected — readable only with Full Disk Access
-		const tccProtectedPath = path.join(
-			homedir(),
-			"Library/Safari/Bookmarks.plist",
-		);
-		fs.accessSync(tccProtectedPath, fs.constants.R_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-function checkAccessibility(): PermissionStatus {
-	if (!PLATFORM.IS_MAC) return "not-applicable";
-	return systemPreferences.isTrustedAccessibilityClient(false);
-}
-
-function checkMicrophone(): PermissionStatus {
-	if (!PLATFORM.IS_MAC) return "not-applicable";
-	try {
-		return systemPreferences.getMediaAccessStatus("microphone") === "granted";
-	} catch {
-		return false;
-	}
-}
+// Every permission behind this router is a macOS TCC prompt. Off macOS there is
+// nothing to grant, so the settings rows hide rather than showing as denied.
+const NOT_APPLICABLE = "not-applicable" as const;
 
 export const createPermissionsRouter = () => {
 	return router({
 		getStatus: publicProcedure.query(() => {
-			return {
-				fullDiskAccess: checkFullDiskAccess(),
-				accessibility: checkAccessibility(),
-				microphone: checkMicrophone(),
-				appleEvents: (PLATFORM.IS_MAC ? undefined : "not-applicable") as
-					| PermissionStatus
-					| undefined,
-				localNetwork: (PLATFORM.IS_MAC ? undefined : "not-applicable") as
-					| PermissionStatus
-					| undefined,
-			};
+			if (!PLATFORM.IS_MAC) {
+				return {
+					fullDiskAccess: NOT_APPLICABLE,
+					accessibility: NOT_APPLICABLE,
+					microphone: NOT_APPLICABLE,
+				};
+			}
+			return getPermissionStatus();
 		}),
 
 		requestFullDiskAccess: publicProcedure.mutation(async () => {
 			if (!PLATFORM.IS_MAC) return;
-			await shell.openExternal(
-				"x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
-			);
+			await requestFullDiskAccess();
 		}),
 
 		requestAccessibility: publicProcedure.mutation(async () => {
 			if (!PLATFORM.IS_MAC) return;
-			await shell.openExternal(
-				"x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-			);
+			await requestAccessibility();
 		}),
 
 		requestMicrophone: publicProcedure.mutation(async () => {
 			if (!PLATFORM.IS_MAC) return { granted: false };
-			try {
-				const granted = await systemPreferences.askForMediaAccess("microphone");
-				if (granted) {
-					return { granted: true };
-				}
-			} catch {
-				// Fall through to opening System Settings.
-			}
-
-			await shell.openExternal(
-				"x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
-			);
-			return { granted: false };
+			return requestMicrophone();
 		}),
 
 		requestAppleEvents: publicProcedure.mutation(async () => {
 			if (!PLATFORM.IS_MAC) return;
-			await shell.openExternal(
-				"x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-			);
+			await requestAppleEvents();
 		}),
 
 		requestLocalNetwork: publicProcedure.mutation(async () => {
 			if (!PLATFORM.IS_MAC) return;
-			await shell.openExternal(
-				"x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension",
-			);
+			await requestLocalNetwork();
 		}),
 	});
 };
-
-export type PermissionsRouter = ReturnType<typeof createPermissionsRouter>;

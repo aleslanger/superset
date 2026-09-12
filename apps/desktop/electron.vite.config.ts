@@ -154,7 +154,6 @@ export default defineConfig({
 				output: {
 					dir: resolve(devPath, "main"),
 				},
-
 				external: ["electron", ...mainExternalizedDependencies],
 				plugins: [sentryPlugin, hostServiceSentryPlugin].filter(Boolean),
 			},

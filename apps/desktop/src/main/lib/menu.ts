@@ -330,19 +330,30 @@ export function createApplicationMenu() {
 			],
 		});
 	} else {
-		// Linux/Windows: add File menu with Settings, Updates, and Quit
 		template.unshift({
-			label: "File",
+			label: i18n._(
+				msg({
+					message: "File",
+				}),
+			),
 			submenu: [
 				{
-					label: "Settings",
+					label: i18n._(
+						msg({
+							message: "Settings...",
+						}),
+					),
 					accelerator: openSettingsAccelerator,
 					click: () => {
 						menuEmitter.emit("open-settings");
 					},
 				},
 				{
-					label: "Check for Updates...",
+					label: i18n._(
+						msg({
+							message: "Check for Updates...",
+						}),
+					),
 					click: () => {
 						checkForUpdatesInteractive();
 					},

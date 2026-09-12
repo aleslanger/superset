@@ -1,4 +1,5 @@
 import { createRequire } from "node:module";
+
 try {
 	const require = createRequire(import.meta.url);
 	require("./patch-node-stream");
@@ -8,6 +9,7 @@ try {
 		err && (err as Error).message,
 	);
 }
+
 import { mkdirSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -491,7 +493,11 @@ if (!gotTheLock) {
 							"/Library/Fonts",
 						]
 					: process.platform === "linux"
-						? ["/usr/share/fonts", "/usr/local/share/fonts", `${path.join(app.getPath("home"), ".local/share/fonts")}`]
+						? [
+								"/usr/share/fonts",
+								"/usr/local/share/fonts",
+								`${path.join(app.getPath("home"), ".local/share/fonts")}`,
+							]
 						: [];
 			const fontProtocolHandler = async (request: Request) => {
 				const url = new URL(request.url);
