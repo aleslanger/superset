@@ -1,18 +1,21 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
+import { useLingui } from "@lingui/react/macro";
+import { formatDate } from "@superset/i18n/format";
 import {
 	ACCOUNT_DELETION_GRACE_DAYS,
 	COMPANY,
 } from "@superset/shared/constants";
 import * as Application from "expo-application";
 import { useRouter } from "expo-router";
-import { Alert, Linking, ScrollView, View } from "react-native";
+import { Alert, ScrollView, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Text } from "@/components/ui/text";
 import { useDeleteAccount } from "@/hooks/useDeleteAccount";
 import { useSignOut } from "@/hooks/useSignOut";
 import { useTheme } from "@/hooks/useTheme";
 import { useSession } from "@/lib/auth/client";
-import { env } from "@/lib/env";
+import { openUrl } from "@/lib/open-url";
+import { billingSettingsUrl } from "@/lib/web-links";
 import { ListRow } from "@/screens/(authenticated)/components/ListRow";
 import { ListRowValue } from "@/screens/(authenticated)/components/ListRowValue";
 import { OrganizationAvatar } from "@/screens/(authenticated)/components/OrganizationAvatar";
@@ -20,14 +23,7 @@ import { useOrganizations } from "@/screens/(authenticated)/hooks/useOrganizatio
 import { SettingsSection } from "./components/SettingsSection";
 import { UserAvatar } from "./components/UserAvatar";
 
-const BILLING_URL = `${env.EXPO_PUBLIC_WEB_URL ?? COMPANY.MARKETING_URL}/settings/billing`;
 const WRITE_REVIEW_URL = `${COMPANY.APP_STORE_URL}?action=write-review`;
-
-function openUrl(url: string) {
-	Linking.openURL(url).catch(() => {
-		Alert.alert("Could not open link", url);
-	});
-}
 
 function ExternalIcon({ color }: { color: string }) {
 	return <Ionicons name="open-outline" size={16} color={color} />;
@@ -37,13 +33,11 @@ function formatJoined(createdAt?: Date | string | null) {
 	if (!createdAt) return null;
 	const date = new Date(createdAt);
 	if (Number.isNaN(date.getTime())) return null;
-	return date.toLocaleDateString(undefined, {
-		month: "long",
-		year: "numeric",
-	});
+	return formatDate(date, { month: "long", year: "numeric" });
 }
 
 export function SettingsScreen() {
+	const { t } = useLingui();
 	const router = useRouter();
 	const theme = useTheme();
 	const insets = useSafeAreaInsets();
@@ -58,25 +52,35 @@ export function SettingsScreen() {
 	const joined = formatJoined(user?.createdAt);
 
 	const handleSignOut = () => {
-		Alert.alert("Log out?", undefined, [
-			{ style: "cancel", text: "Cancel" },
+		Alert.alert(t({ message: "Log out?" }), undefined, [
+			{
+				style: "cancel",
+				text: t({ message: "Cancel" }),
+			},
 			{
 				onPress: () => void signOut(),
 				style: "destructive",
-				text: "Log out",
+				text: t({ message: "Log out" }),
 			},
 		]);
 	};
 
 	const handleManagePlan = () => {
 		Alert.alert(
-			"Manage Plan on the Web",
-			`You can't change your plan in the app because it's managed on the web at ${COMPANY.DOMAIN}.`,
+			t({
+				message: "Manage plan on the web",
+			}),
+			t({
+				message: `You can't change this subscription in the app. Your organization's plan is managed by its owner at ${COMPANY.DOMAIN}.`,
+			}),
 			[
-				{ style: "cancel", text: "Dismiss" },
 				{
-					text: `Manage on ${COMPANY.DOMAIN}`,
-					onPress: () => openUrl(BILLING_URL),
+					style: "cancel",
+					text: t({ message: "Dismiss" }),
+				},
+				{
+					onPress: () => openUrl(billingSettingsUrl()),
+					text: t({ message: `Manage on ${COMPANY.DOMAIN}` }),
 				},
 			],
 		);
@@ -84,18 +88,32 @@ export function SettingsScreen() {
 
 	const handleDeleteAccount = () => {
 		Alert.alert(
-			"Delete account?",
-			`All of your data will be permanently deleted after ${ACCOUNT_DELETION_GRACE_DAYS} days. Sign back in before then to restore your account.`,
+			t({
+				message: "Delete account?",
+			}),
+			t({
+				message: `All of your data will be permanently deleted after ${ACCOUNT_DELETION_GRACE_DAYS} days. Sign back in before then to restore your account.`,
+			}),
 			[
-				{ style: "cancel", text: "Cancel" },
+				{
+					style: "cancel",
+					text: t({ message: "Cancel" }),
+				},
 				{
 					style: "destructive",
-					text: "Delete account",
+					text: t({
+						message: "Delete account",
+					}),
 					onPress: () => {
 						deleteAccount().catch(() => {
 							Alert.alert(
-								"Could not delete account",
-								"Something went wrong. Try again, or contact support@superset.sh.",
+								t({
+									message: "Could not delete account",
+								}),
+								t({
+									message:
+										"Something went wrong. Try again, or contact support@superset.sh.",
+								}),
 							);
 						});
 					},
@@ -129,11 +147,19 @@ export function SettingsScreen() {
 					{user?.email}
 				</Text>
 				<Text className="text-sm" style={{ color: theme.mutedForeground }}>
-					{joined ? `${planLabel} · Joined ${joined}` : planLabel}
+					{joined
+						? t({
+								message: `${planLabel} · Joined ${joined}`,
+							})
+						: planLabel}
 				</Text>
 			</View>
 
-			<SettingsSection label="Organization">
+			<SettingsSection
+				label={t({
+					message: "Organization",
+				})}
+			>
 				<ListRow
 					icon={
 						<Ionicons
@@ -142,7 +168,9 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Organization"
+					label={t({
+						message: "Organization",
+					})}
 					trailing={
 						<ListRowValue
 							value={activeOrganization?.name ?? ""}
@@ -167,7 +195,7 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Hosts"
+					label={t({ message: "Hosts" })}
 					trailing={
 						<Ionicons
 							name="chevron-forward"
@@ -180,7 +208,7 @@ export function SettingsScreen() {
 				/>
 			</SettingsSection>
 
-			<SettingsSection label="Plan">
+			<SettingsSection label={t({ message: "Plan", context: "billing" })}>
 				<ListRow
 					icon={
 						<Ionicons
@@ -189,14 +217,16 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Manage Plan"
+					label={t({
+						message: "Manage Plan",
+					})}
 					trailing={<ListRowValue value={planLabel} />}
 					onPress={handleManagePlan}
 					isLast
 				/>
 			</SettingsSection>
 
-			<SettingsSection label="Support">
+			<SettingsSection label={t({ message: "Support" })}>
 				<ListRow
 					icon={
 						<Ionicons
@@ -205,7 +235,9 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Help & Docs"
+					label={t({
+						message: "Help & Docs",
+					})}
 					trailing={<ExternalIcon color={theme.mutedForeground} />}
 					onPress={() => openUrl(COMPANY.DOCS_URL)}
 				/>
@@ -217,7 +249,9 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Community"
+					label={t({
+						message: "Community",
+					})}
 					trailing={<ExternalIcon color={theme.mutedForeground} />}
 					onPress={() => openUrl(COMPANY.DISCORD_URL)}
 				/>
@@ -229,7 +263,9 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Contact Support"
+					label={t({
+						message: "Contact Support",
+					})}
 					trailing={<ExternalIcon color={theme.mutedForeground} />}
 					onPress={() => openUrl(COMPANY.MAIL_TO)}
 				/>
@@ -241,14 +277,16 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Rate Superset"
+					label={t({
+						message: "Rate Superset",
+					})}
 					trailing={<ExternalIcon color={theme.mutedForeground} />}
 					onPress={() => openUrl(WRITE_REVIEW_URL)}
 					isLast
 				/>
 			</SettingsSection>
 
-			<SettingsSection label="More">
+			<SettingsSection label={t({ message: "More" })}>
 				<ListRow
 					icon={
 						<Ionicons
@@ -257,13 +295,17 @@ export function SettingsScreen() {
 							color={theme.mutedForeground}
 						/>
 					}
-					label="Sign out"
+					label={t({ message: "Sign out" })}
 					onPress={isSigningOut ? undefined : handleSignOut}
 					isLast
 				/>
 			</SettingsSection>
 
-			<SettingsSection label="Danger Zone">
+			<SettingsSection
+				label={t({
+					message: "Danger Zone",
+				})}
+			>
 				<ListRow
 					icon={
 						<Ionicons
@@ -272,7 +314,9 @@ export function SettingsScreen() {
 							color={theme.destructive}
 						/>
 					}
-					label="Delete Account"
+					label={t({
+						message: "Delete Account",
+					})}
 					destructive
 					onPress={isDeleting ? undefined : handleDeleteAccount}
 					isLast

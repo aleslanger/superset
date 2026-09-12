@@ -3,6 +3,8 @@ import {
 	teardownSingleAgent,
 	writeSharedDisabledAgentIds,
 } from "@superset/agent-setup";
+import type { SupportedLocale } from "@superset/i18n/locales";
+import { isSupportedLocale } from "@superset/i18n/locales";
 import {
 	type AgentCustomDefinition,
 	type AgentPresetOverrideEnvelope,
@@ -39,11 +41,13 @@ import {
 } from "@superset/shared/agent-settings";
 import { NOTIFICATION_VOLUME_LIMITS } from "@superset/shared/settings-constraints";
 import { TRPCError } from "@trpc/server";
+import { observable } from "@trpc/server/observable";
 import { app } from "electron";
 import { env } from "main/env.main";
 import { exitImmediately } from "main/index";
 import { hasCustomRingtone } from "main/lib/custom-ringtones";
 import { getHostServiceCoordinator } from "main/lib/host-service-coordinator";
+import { applyAppLanguage, languageEvents } from "main/lib/language";
 import { localDb } from "main/lib/local-db";
 import {
 	DEFAULT_AUTO_APPLY_DEFAULT_PRESET,
@@ -53,6 +57,8 @@ import {
 	DEFAULT_OPEN_LINKS_IN_APP,
 	DEFAULT_SHOW_PRESETS_BAR,
 	DEFAULT_SHOW_RESOURCE_MONITOR,
+	DEFAULT_SHOW_USAGE_IN_SIDEBAR,
+	DEFAULT_TERMINAL_COPY_ON_SELECT,
 	DEFAULT_TERMINAL_LINK_BEHAVIOR,
 	DEFAULT_TERMINAL_PARKED_RUNTIME_CAP,
 	DEFAULT_USE_COMPACT_TERMINAL_ADD_BUTTON,
@@ -61,6 +67,7 @@ import {
 	MIN_TERMINAL_PARKED_RUNTIME_CAP,
 } from "shared/constants";
 import { normalizePresetProjectIds } from "shared/preset-project-targeting";
+import { getPresetsForTriggerField } from "shared/preset-trigger-selection";
 import {
 	CUSTOM_RINGTONE_ID,
 	DEFAULT_RINGTONE_ID,
@@ -79,6 +86,10 @@ import {
 	updateCustomAgentInputSchema,
 } from "./agent-preset-router.utils";
 import {
+	acknowledgeCliTerminalScripts,
+	isPendingCliTerminalScript,
+} from "./cli-terminal-script-import";
+import {
 	setFontSettingsSchema,
 	transformFontSettings,
 } from "./font-settings.utils";
@@ -87,7 +98,6 @@ import {
 	type PresetWithUnknownMode,
 	shouldPersistNormalizedTerminalPresets,
 } from "./preset-execution-mode";
-import { getPresetsForTriggerField } from "./preset-trigger-selection";
 
 function isValidRingtoneId(ringtoneId: string): boolean {
 	if (isBuiltInRingtoneId(ringtoneId)) {
@@ -278,6 +288,36 @@ export const createSettingsRouter = () => {
 			}
 			return getNormalizedTerminalPresets();
 		}),
+		getPendingCliTerminalScripts: publicProcedure
+			.input(z.object({ organizationId: z.string().min(1) }))
+			.query(({ input }) =>
+				getNormalizedTerminalPresets().filter((script) =>
+					isPendingCliTerminalScript(script, input.organizationId),
+				),
+			),
+		acknowledgeCliTerminalScripts: publicProcedure
+			.input(
+				z.object({
+					organizationId: z.string().min(1),
+					ids: z.array(z.string()).min(1),
+				}),
+			)
+			.mutation(({ input }) =>
+				// Immediate transaction: a concurrent `superset scripts add` must not
+				// land between this read and write or its row would be dropped.
+				localDb.transaction(
+					() => {
+						const result = acknowledgeCliTerminalScripts({
+							scripts: getNormalizedTerminalPresets(),
+							organizationId: input.organizationId,
+							ids: input.ids,
+						});
+						if (result.changed) saveTerminalPresets(result.scripts);
+						return { acknowledged: result.changed };
+					},
+					{ behavior: "immediate" },
+				),
+			),
 		getAgentPresets: publicProcedure.query(() => getResolvedAgentPresets()),
 		createCustomAgent: publicProcedure
 			.input(createCustomAgentInputSchema)
@@ -459,7 +499,7 @@ export const createSettingsRouter = () => {
 				if (!preset) {
 					throw new TRPCError({
 						code: "NOT_FOUND",
-						message: `Terminal preset ${input.id} not found`,
+						message: `Terminal script ${input.id} not found`,
 					});
 				}
 
@@ -579,6 +619,56 @@ export const createSettingsRouter = () => {
 				getPresetsForTrigger("applyOnNewTab", input?.projectId ?? null),
 			),
 
+		// App display language: "auto"/null = follow the system language.
+		getLanguage: publicProcedure.query(() => {
+			const row = getSettings();
+			const stored = row.language;
+			return stored && isSupportedLocale(stored) ? stored : null;
+		}),
+
+		onLanguageChange: publicProcedure.subscription(() =>
+			observable<SupportedLocale | null>((emit) => {
+				const notify = (stored: string | null) =>
+					emit.next(stored && isSupportedLocale(stored) ? stored : null);
+				languageEvents.on("change", notify);
+				notify(getSettings().language);
+				return () => {
+					languageEvents.off("change", notify);
+				};
+			}),
+		),
+
+		setLanguage: publicProcedure
+			.input(z.object({ language: z.string().nullable() }))
+			.mutation(async ({ input }) => {
+				const value =
+					input.language === null || input.language === "auto"
+						? null
+						: input.language;
+				if (value !== null && !isSupportedLocale(value)) {
+					throw new TRPCError({
+						code: "BAD_REQUEST",
+						message: `Unsupported language: ${value}`,
+					});
+				}
+				// Target the row getSettings() reads: legacy DBs can hold a non-1
+				// row id, and upserting id 1 there would split settings across
+				// two rows, so getLanguage would keep reading the old row's null.
+				const { id } = getSettings();
+				localDb
+					.insert(settings)
+					.values({ id, language: value })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { language: value },
+					})
+					.run();
+				// The application and tray menus resolve their labels when they are
+				// built, so they need an explicit rebuild on a language change.
+				// Awaited: the catalog for the new locale loads on demand.
+				await applyAppLanguage(value);
+			}),
+
 		getSelectedRingtoneId: publicProcedure.query(() => {
 			const row = getSettings();
 			const storedId = row.selectedRingtoneId;
@@ -666,16 +756,15 @@ export const createSettingsRouter = () => {
 					})
 					.run();
 
-				// Restart active host-service children so they pick up the new
-				// RELAY_URL from buildEnv(). No-op if the user isn't signed in.
+				// Restart host services, including missing authenticated orgs, so
+				// they pick up the new RELAY_URL. No-op when not signed in.
 				const { token } = await loadToken();
 				if (!token) {
 					return { restartedOrgCount: 0 };
 				}
 
 				const coordinator = getHostServiceCoordinator();
-				const restartedOrgCount = coordinator.getActiveOrganizationIds().length;
-				await coordinator.restartAll({
+				const restartedOrgCount = await coordinator.restartAll({
 					authToken: token,
 					cloudApiUrl: env.NEXT_PUBLIC_API_URL,
 				});
@@ -996,6 +1085,26 @@ export const createSettingsRouter = () => {
 				return { success: true };
 			}),
 
+		getTerminalCopyOnSelect: publicProcedure.query(() => {
+			const row = getSettings();
+			return row.terminalCopyOnSelect ?? DEFAULT_TERMINAL_COPY_ON_SELECT;
+		}),
+
+		setTerminalCopyOnSelect: publicProcedure
+			.input(z.object({ enabled: z.boolean() }))
+			.mutation(({ input }) => {
+				localDb
+					.insert(settings)
+					.values({ id: 1, terminalCopyOnSelect: input.enabled })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { terminalCopyOnSelect: input.enabled },
+					})
+					.run();
+
+				return { success: true };
+			}),
+
 		getShowResourceMonitor: publicProcedure.query(() => {
 			const row = getSettings();
 			return row.showResourceMonitor ?? DEFAULT_SHOW_RESOURCE_MONITOR;
@@ -1010,6 +1119,30 @@ export const createSettingsRouter = () => {
 					.onConflictDoUpdate({
 						target: settings.id,
 						set: { showResourceMonitor: input.enabled },
+					})
+					.run();
+
+				return { success: true };
+			}),
+
+		getShowUsageInSidebar: publicProcedure.query(() => {
+			const row = getSettings();
+			return row.showUsageInSidebar ?? DEFAULT_SHOW_USAGE_IN_SIDEBAR;
+		}),
+
+		setShowUsageInSidebar: publicProcedure
+			.input(z.object({ enabled: z.boolean() }))
+			.mutation(({ input }) => {
+				// Target the row getSettings() reads: legacy DBs can hold a non-1
+				// row id, and upserting id 1 there would split settings across
+				// two rows.
+				const { id } = getSettings();
+				localDb
+					.insert(settings)
+					.values({ id, showUsageInSidebar: input.enabled })
+					.onConflictDoUpdate({
+						target: settings.id,
+						set: { showUsageInSidebar: input.enabled },
 					})
 					.run();
 

@@ -125,6 +125,19 @@ export interface UIColors {
 	destructive: string;
 	destructiveForeground: string;
 
+	// Warning / needs-attention states (past-due billing, degraded checks).
+	// Distinct from destructive: the situation is recoverable.
+	//
+	// Optional so themes authored before this token keep loading — applyUIColors
+	// skips absent values, so they inherit the default from globals.css.
+	warning?: string;
+	warningForeground?: string;
+
+	// Connected / healthy states (a live plugin connection, a passing check).
+	// Optional for the same reason as warning: themes authored before it keep
+	// loading and inherit the default from globals.css.
+	success?: string;
+
 	// Borders and inputs
 	border: string;
 	input: string;

@@ -1,9 +1,12 @@
+import { msg } from "@lingui/core/macro";
 import { STRIP_KATALON_ATTRS_SCRIPT } from "@superset/shared/constants";
 import { Toaster } from "@superset/ui/sonner";
 import { cn } from "@superset/ui/utils";
 import type { Metadata, Viewport } from "next";
 import { IBM_Plex_Mono, Inter } from "next/font/google";
 import Script from "next/script";
+
+import { initServerI18n } from "@/lib/i18n-server";
 
 import "./globals.css";
 
@@ -21,16 +24,19 @@ const inter = Inter({
 	variable: "--font-inter",
 });
 
-export const metadata: Metadata = {
-	title: "Superset | Company Dashboard",
-	description: "Analytics, Ops, and more",
-	icons: {
-		icon: [
-			{ url: "/favicon.ico", sizes: "32x32" },
-			{ url: "/favicon-192.png", sizes: "192x192", type: "image/png" },
-		],
-	},
-};
+export async function generateMetadata(): Promise<Metadata> {
+	const i18n = await initServerI18n();
+	return {
+		title: i18n._(msg({ message: "Superset | Company Dashboard" })),
+		description: i18n._(msg({ message: "Analytics, Ops, and more" })),
+		icons: {
+			icon: [
+				{ url: "/favicon.ico", sizes: "32x32" },
+				{ url: "/favicon-192.png", sizes: "192x192", type: "image/png" },
+			],
+		},
+	};
+}
 
 export const viewport: Viewport = {
 	themeColor: [
@@ -39,13 +45,14 @@ export const viewport: Viewport = {
 	],
 };
 
-export default function RootLayout({
+export default async function RootLayout({
 	children,
 }: {
 	children: React.ReactNode;
 }) {
+	const i18n = await initServerI18n();
 	return (
-		<html lang="en" suppressHydrationWarning>
+		<html lang={i18n.locale} suppressHydrationWarning>
 			<head>
 				<Script id="strip-katalon-attrs" strategy="beforeInteractive">
 					{STRIP_KATALON_ATTRS_SCRIPT}
@@ -58,7 +65,12 @@ export default function RootLayout({
 					ibmPlexMono.variable,
 				)}
 			>
-				<Providers>
+				<Providers
+					locale={
+						i18n.locale as import("@superset/i18n/locales").SupportedLocale
+					}
+					initialMessages={i18n.messages}
+				>
 					{children}
 					<Toaster />
 				</Providers>

@@ -1,6 +1,7 @@
 import { COMPANY } from "@superset/shared/constants";
 import {
 	API_URL,
+	buildFrontmatter,
 	buildWhenToUseSection,
 	MARKDOWN_HEADERS,
 	MCP_SERVER_URL,
@@ -11,6 +12,11 @@ export async function GET() {
 	const docsUrl = COMPANY.DOCS_URL;
 
 	const lines: string[] = [
+		...buildFrontmatter({
+			title: `${COMPANY.NAME} for AI agents`,
+			description: `Machine-readable entry point for AI agents working with ${COMPANY.NAME}: API surface, authentication, and the jobs it is the right tool for.`,
+			canonical: `${baseUrl}/agents.md`,
+		}),
 		`# ${COMPANY.NAME} for AI agents`,
 		"",
 		`This page is the machine-readable entry point for AI agents working with ${COMPANY.NAME} (${baseUrl}). It lists the API surface, authentication, and the jobs ${COMPANY.NAME} is the right tool for.`,
@@ -25,7 +31,7 @@ export async function GET() {
 		"- **Workspaces**: create a branch- or PR-scoped Git worktree on a registered host, list, rename, and delete workspaces.",
 		"- **Agents**: launch a coding-agent session with a prompt inside a workspace; list the agent presets installed on a host.",
 		"- **Terminals**: open a PTY in a workspace, optionally running a one-off command.",
-		"- **Automations**: schedule recurring agent runs (RFC 5545 RRULE), pause/resume/run them, and read run logs.",
+		"- **Automations**: schedule recurring agent runs (RFC 5545 RRULE), pause/resume/run them, and read run logs. Creating, running, and resuming need the Pro plan; listing, pausing, editing, and deleting do not.",
 		"- **Hosts and projects**: enumerate the machines and checked-out repositories available to the user.",
 		"",
 		"## Endpoints",

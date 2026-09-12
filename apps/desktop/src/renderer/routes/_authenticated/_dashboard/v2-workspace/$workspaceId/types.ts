@@ -1,3 +1,4 @@
+import type { AgentIdentityId } from "@superset/shared/agent-catalog";
 export interface FilePaneData {
 	filePath: string;
 	mode: "editor" | "diff" | "preview";
@@ -52,8 +53,36 @@ export interface CommentPaneData {
 	line?: number;
 }
 
+/** The workspace's linked PR, shown as its summary (description, checks, merge). */
+export interface PullRequestPaneData {
+	prNumber: number;
+}
+
+export interface PagePaneData {
+	slug: string;
+	pageId?: string;
+	title?: string;
+}
+
 export interface ChatV3PaneData {
 	sessionId: string | null;
+}
+
+export interface DesktopPaneData {
+	kind: "desktop";
+}
+
+/**
+ * Pointer to one subagent's transcript. The transcript itself is fetched
+ * from the host on every read; only this pointer is persisted.
+ */
+export const SUBAGENT_PANE_KIND = "subagent";
+
+export interface SubagentPaneData {
+	terminalId: string;
+	subagentId: string;
+	agentId: AgentIdentityId;
+	agentType?: string;
 }
 
 export type PaneViewerData =
@@ -63,4 +92,8 @@ export type PaneViewerData =
 	| BrowserPaneData
 	| DevtoolsPaneData
 	| DiffPaneData
-	| CommentPaneData;
+	| CommentPaneData
+	| PullRequestPaneData
+	| PagePaneData
+	| DesktopPaneData
+	| SubagentPaneData;

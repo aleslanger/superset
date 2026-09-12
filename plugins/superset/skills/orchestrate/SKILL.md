@@ -1,6 +1,8 @@
 ---
 name: orchestrate
-description: Coordinate multiple terminal coding agents through the Superset CLI by creating isolated workspaces, launching workers, sending follow-ups, reading terminal output, tracking dependencies, and collecting structured results. Use when asked to delegate or parallelize coding work, coordinate agents across workspaces or hosts, hand work between agents, monitor worker progress, or run a multi-agent workflow with Superset. Do not use for ordinary single-agent workspace, task, or automation management.
+description: Coordinate several coding agents in parallel through Superset, each in its own workspace, with follow-ups, progress reads, dependency tracking, and structured results. Use when the user asks to delegate, parallelize, fan out, or split up coding work across agents, workspaces, or hosts, hand work between agents, or monitor workers, including "spin up agents for each of these", "run these in parallel", "what are my workers doing". Not for ordinary single-agent workspace, task, or automation management.
+argument-hint: the work to split up and coordinate
+allowed-tools: Bash(superset:*)
 ---
 
 # Superset Orchestration
@@ -12,8 +14,7 @@ Coordinate terminal agents with Superset's workspace, agent, and terminal comman
 1. Run `superset auth whoami --json`.
 2. Run `superset terminals --help` and require `list`, `read`, `send`, and `close`.
 3. If those commands are absent, run `superset update` and recheck. Do not invent or substitute unsupported orchestration commands.
-4. When developing inside the Superset monorepo, use `bun run --cwd packages/cli dev --` in place of `superset` to exercise the source CLI against the API configured in the root `.env`. To reuse production CLI authentication while testing unreleased source commands, run them from `packages/cli` with `SUPERSET_API_URL=https://api.superset.sh bunx cli-framework dev`.
-5. Resolve the workspace, host, and terminal-capable agent before dispatching:
+4. Resolve the workspace, host, and terminal-capable agent before dispatching:
 
 ```bash
 superset hosts list --json
@@ -144,6 +145,17 @@ For isolated branches, ask each implementation worker to commit or otherwise pro
 ## Finish and clean up
 
 Summarize each task's outcome, workspace/branch, files changed, checks, blockers, and integration order. Distinguish worker claims from checks the coordinator independently ran.
+
+A run across several workspaces is worth a page. One link carrying every outcome, branch, and
+check reads better than a long terminal block, it survives the session, and reviewers can pin
+a comment to the row they disagree with:
+
+```bash
+superset pages publish run-summary.html --workspace <id> --title "Parallel run: auth refactor"
+```
+
+Offer it and publish only once the user agrees. A page is persistent and
+org-visible by default, and a run summary quotes whatever the workers printed.
 
 Keep completed terminals available when the user may want to inspect or continue them. Close a terminal only when cleanup is requested or clearly part of the workflow:
 

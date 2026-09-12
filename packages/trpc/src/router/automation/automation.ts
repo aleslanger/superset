@@ -9,6 +9,11 @@ import {
 } from "@superset/db/schema";
 import type { DraftTrigger } from "@superset/shared/automation-triggers";
 import {
+	AUTOMATIONS_REQUIRED_PLAN,
+	planAllowsAutomations,
+	planTierFromSubscription,
+} from "@superset/shared/billing";
+import {
 	describeSchedule,
 	nextOccurrenceAfter,
 	nextOccurrences,
@@ -17,12 +22,17 @@ import {
 import { TRPCError, type TRPCRouterRecord } from "@trpc/server";
 import { and, asc, desc, eq, ilike } from "drizzle-orm";
 import { z } from "zod";
-import { resolveUserRelayUrl } from "../../lib/relay-url";
-import { protectedProcedure } from "../../trpc";
-import { requireActiveOrgMembership } from "../utils/active-org";
+import { env } from "../../env";
+import { planRequiredError, protectedProcedure, userError } from "../../trpc";
+import { joinSlackTriggerChannels } from "../integration/slack/joinChannels";
+import {
+	requireActiveOrgMembership,
+	requireActiveOrgMembershipWithSubscription,
+} from "../utils/active-org";
 import { dispatchAutomation } from "./dispatch";
 import {
 	automationBaseColumns,
+	automationNotFound,
 	getAutomationForUser,
 	NO_SCHEDULE,
 	promptSourceFromSession,
@@ -42,6 +52,27 @@ import {
 import { saveTriggerSet } from "./triggerSet";
 import { automationVersionsRouter } from "./versions";
 import { generateWebhookToken, hashWebhookToken } from "./webhookSecret";
+
+/**
+ * Membership plus the Pro gate. Automations are a Pro feature: creating,
+ * running, and resuming one needs a paying org. Reading, editing, pausing,
+ * and deleting stay open so a downgraded org keeps control of what it has —
+ * those rows simply stop firing (the dispatchers apply the same tier map).
+ */
+async function requireAutomationsPlan(
+	ctx: Parameters<typeof requireActiveOrgMembershipWithSubscription>[0],
+): Promise<string> {
+	const { organizationId, subscription } =
+		await requireActiveOrgMembershipWithSubscription(ctx);
+	if (!planAllowsAutomations(planTierFromSubscription(subscription))) {
+		throw planRequiredError({
+			message: "Automations require the Pro plan.",
+			i18nKey: "serverError.automation.automationsRequireThePro",
+			requiredPlan: AUTOMATIONS_REQUIRED_PLAN,
+		});
+	}
+	return organizationId;
+}
 
 function escapeLikePattern(value: string): string {
 	return value.replace(/[\\%_]/g, (match) => `\\${match}`);
@@ -83,9 +114,10 @@ async function verifyHostAccess(
 		.limit(1);
 
 	if (!membership) {
-		throw new TRPCError({
+		throw userError({
 			code: "FORBIDDEN",
 			message: "You don't have access to this host",
+			i18nKey: "serverError.automation.youDonTHaveAccess",
 		});
 	}
 }
@@ -106,9 +138,10 @@ async function verifyWorkspaceInOrg(
 		.limit(1);
 
 	if (!workspace || workspace.organizationId !== organizationId) {
-		throw new TRPCError({
+		throw userError({
 			code: "NOT_FOUND",
 			message: "Workspace not found",
+			i18nKey: "serverError.automation.workspaceNotFound",
 		});
 	}
 	return {
@@ -215,7 +248,10 @@ export const automationRouter = {
 			const summaries = await scheduleSummariesFor(rows.map((row) => row.id));
 
 			return rows.map((row) => {
-				const schedule = summaries.get(row.id) ?? NO_SCHEDULE;
+				const schedule = summaries.get(row.id) ?? {
+					...NO_SCHEDULE,
+					triggerCount: 0,
+				};
 				return {
 					...row,
 					...schedule,
@@ -248,10 +284,7 @@ export const automationRouter = {
 			// Reads are org-scoped (Team tab links to any member's automation);
 			// mutations stay owner-scoped via getAutomationForUser.
 			if (!row) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Automation not found",
-				});
+				throw await automationNotFound(input.id, ctx.session.user.id);
 			}
 
 			// The whole set, since the editor saves it as one and needs the ids to
@@ -282,7 +315,7 @@ export const automationRouter = {
 	create: protectedProcedure
 		.input(createAutomationSchema)
 		.mutation(async ({ ctx, input }) => {
-			const organizationId = await requireActiveOrgMembership(ctx);
+			const organizationId = await requireAutomationsPlan(ctx);
 
 			if (input.targetHostId) {
 				await verifyHostAccess(
@@ -307,20 +340,32 @@ export const automationRouter = {
 					input.v2WorkspaceId,
 				);
 				if (targetHostId && targetHostId !== workspace.hostId) {
-					throw new TRPCError({
+					throw userError({
 						code: "BAD_REQUEST",
 						message: "targetHostId does not match the workspace's host",
+						i18nKey:
+							"serverError.automation.targethostidDoesNotMatchTheWorkspace",
 					});
 				}
 				targetHostId = workspace.hostId;
 				if (v2ProjectId && v2ProjectId !== workspace.projectId) {
-					throw new TRPCError({
+					throw userError({
 						code: "BAD_REQUEST",
 						message: "v2ProjectId does not match the workspace's project",
+						i18nKey:
+							"serverError.automation.v2projectidDoesNotMatchTheWorkspace",
 					});
 				}
 				v2ProjectId = workspace.projectId;
 			}
+			if (input.continueAgentSession && !input.v2WorkspaceId) {
+				throw userError({
+					code: "BAD_REQUEST",
+					message: "Continuing an agent session requires a pinned workspace",
+					i18nKey: "serverError.automation.continueNeedsPinnedWorkspace",
+				});
+			}
+
 			// No project and no pin = session automation: each run creates a
 			// project-less session workspace on the host.
 
@@ -362,14 +407,19 @@ export const automationRouter = {
 						targetHostId,
 						v2ProjectId,
 						v2WorkspaceId: input.v2WorkspaceId ?? null,
+						// Every automation groups its runs out of the box; explicit
+						// tags (including []) override the default.
+						tags: input.tags ?? ["automation"],
+						continueAgentSession: input.continueAgentSession ?? false,
 					})
 					.returning();
 
 				const row = inserted[0];
 				if (!row) {
-					throw new TRPCError({
+					throw userError({
 						code: "INTERNAL_SERVER_ERROR",
 						message: "Failed to create automation",
+						i18nKey: "serverError.automation.failedToCreateAutomation",
 					});
 				}
 
@@ -388,18 +438,28 @@ export const automationRouter = {
 					});
 				}
 
-				await recordPromptVersion(tx, {
-					automationId: row.id,
-					authorUserId: ctx.session.user.id,
-					content: input.prompt,
-					source: promptSourceFromSession(ctx.session),
-				});
+				// An untitled automation starts with no instructions; recording that
+				// as v1 would put an empty entry in every version history. Trimmed,
+				// to match what runNow and the dispatcher call instruction-less.
+				if (input.prompt.trim().length > 0) {
+					await recordPromptVersion(tx, {
+						automationId: row.id,
+						authorUserId: ctx.session.user.id,
+						content: input.prompt,
+						source: promptSourceFromSession(ctx.session),
+					});
+				}
 
 				return row;
 			});
 
 			// Reported from what was actually written, not from the input: a
 			// trigger set may describe a different schedule, or none at all.
+			// After the commit: joining can only make a saved trigger start working.
+			if (input.triggers) {
+				await joinSlackTriggerChannels(organizationId, input.triggers);
+			}
+
 			return withSchedule(created, input.triggers ?? null, legacySchedule);
 		}),
 
@@ -470,9 +530,11 @@ export const automationRouter = {
 					input.v2ProjectId !== undefined &&
 					input.v2ProjectId !== workspace.projectId
 				) {
-					throw new TRPCError({
+					throw userError({
 						code: "BAD_REQUEST",
 						message: "v2ProjectId does not match the workspace's project",
+						i18nKey:
+							"serverError.automation.v2projectidDoesNotMatchTheWorkspace",
 					});
 				}
 				nextProjectId = workspace.projectId;
@@ -481,9 +543,11 @@ export const automationRouter = {
 					input.targetHostId !== null &&
 					input.targetHostId !== workspace.hostId
 				) {
-					throw new TRPCError({
+					throw userError({
 						code: "BAD_REQUEST",
 						message: "targetHostId does not match the workspace's host",
+						i18nKey:
+							"serverError.automation.targethostidDoesNotMatchTheWorkspace",
 					});
 				}
 				nextTargetHostId = workspace.hostId;
@@ -499,6 +563,22 @@ export const automationRouter = {
 					nextTargetHostId,
 				);
 			}
+
+			// Asking for it without a pin is a mistake worth reporting; losing the
+			// pin some other way (a host or project change nulls it above) just
+			// takes the flag with it, since the session it would continue lived
+			// in that workspace.
+			if (input.continueAgentSession === true && nextWorkspaceId === null) {
+				throw userError({
+					code: "BAD_REQUEST",
+					message: "Continuing an agent session requires a pinned workspace",
+					i18nKey: "serverError.automation.continueNeedsPinnedWorkspace",
+				});
+			}
+			const nextContinueAgentSession =
+				nextWorkspaceId === null
+					? false
+					: (input.continueAgentSession ?? existing.continueAgentSession);
 
 			const nextRrule = input.rrule ?? existing.rrule;
 			const nextDtstart = input.dtstart ?? existing.dtstart;
@@ -526,17 +606,31 @@ export const automationRouter = {
 						targetHostId: nextTargetHostId,
 						v2ProjectId: nextProjectId,
 						v2WorkspaceId: nextWorkspaceId,
+						tags: input.tags ?? existing.tags,
+						continueAgentSession: nextContinueAgentSession,
+						prompt: input.prompt ?? existing.prompt,
 					})
 					.where(eq(automations.id, input.id))
 					.returning();
 
 				if (!row) {
-					throw new TRPCError({
+					throw userError({
 						code: "NOT_FOUND",
 						message: "Automation not found",
+						i18nKey: "serverError.automation.automationNotFound",
 					});
 				}
 
+				// Only on a real change, so saving a scope tweak doesn't mint a
+				// version identical to the last one.
+				if (input.prompt !== undefined && input.prompt !== existing.prompt) {
+					await recordPromptVersion(tx, {
+						automationId: row.id,
+						authorUserId: ctx.session.user.id,
+						content: input.prompt,
+						source: promptSourceFromSession(ctx.session),
+					});
+				}
 				if (input.triggers) {
 					await saveTriggerSet(tx, {
 						automationId: row.id,
@@ -556,6 +650,10 @@ export const automationRouter = {
 
 				return row;
 			});
+
+			if (input.triggers) {
+				await joinSlackTriggerChannels(organizationId, input.triggers);
+			}
 
 			// Same as create: a trigger set may have replaced or removed the
 			// schedule, so the response reflects what was saved.
@@ -588,10 +686,7 @@ export const automationRouter = {
 				)
 				.limit(1);
 			if (!existing) {
-				throw new TRPCError({
-					code: "NOT_FOUND",
-					message: "Automation not found",
-				});
+				throw await automationNotFound(input.id, ctx.session.user.id);
 			}
 			return existing;
 		}),
@@ -618,9 +713,10 @@ export const automationRouter = {
 					.returning();
 
 				if (!row) {
-					throw new TRPCError({
+					throw userError({
 						code: "NOT_FOUND",
 						message: "Automation not found",
+						i18nKey: "serverError.automation.automationNotFound",
 					});
 				}
 
@@ -651,7 +747,7 @@ export const automationRouter = {
 			const organizationId = await requireActiveOrgMembership(ctx);
 			await getAutomationForUser(ctx.session.user.id, organizationId, input.id);
 
-			await dbWs.delete(automations).where(eq(automations.id, input.id));
+			await db.delete(automations).where(eq(automations.id, input.id));
 
 			return { ok: true };
 		}),
@@ -659,7 +755,10 @@ export const automationRouter = {
 	setEnabled: protectedProcedure
 		.input(z.object({ id: z.string().uuid(), enabled: z.boolean() }))
 		.mutation(async ({ ctx, input }) => {
-			const organizationId = await requireActiveOrgMembership(ctx);
+			// Pausing is always allowed; resuming is what needs the plan.
+			const organizationId = input.enabled
+				? await requireAutomationsPlan(ctx)
+				: await requireActiveOrgMembership(ctx);
 			const existing = await getAutomationForUser(
 				ctx.session.user.id,
 				organizationId,
@@ -676,9 +775,10 @@ export const automationRouter = {
 					.returning();
 
 				if (!row) {
-					throw new TRPCError({
+					throw userError({
 						code: "NOT_FOUND",
 						message: "Automation not found",
+						i18nKey: "serverError.automation.automationNotFound",
 					});
 				}
 
@@ -691,9 +791,9 @@ export const automationRouter = {
 
 			// Re-read rather than echo the input: the resume just recomputed every
 			// schedule's next run, and the soonest of them is what changed.
-			const schedule =
-				(await scheduleSummariesFor([updated.id])).get(updated.id) ??
-				NO_SCHEDULE;
+			const schedule = (await scheduleSummariesFor([updated.id])).get(
+				updated.id,
+			) ?? { ...NO_SCHEDULE, triggerCount: 0 };
 			return {
 				...updated,
 				...schedule,
@@ -704,35 +804,51 @@ export const automationRouter = {
 	runNow: protectedProcedure
 		.input(z.object({ id: z.string().uuid() }))
 		.mutation(async ({ ctx, input }) => {
-			const organizationId = await requireActiveOrgMembership(ctx);
+			const organizationId = await requireAutomationsPlan(ctx);
 			const automation = await getAutomationForUser(
 				ctx.session.user.id,
 				organizationId,
 				input.id,
 			);
 
+			// The dispatcher refuses this too, but through runNow it would surface
+			// as a 500 — an expected user state, not a server fault.
+			if (automation.prompt.trim().length === 0) {
+				throw userError({
+					code: "PRECONDITION_FAILED",
+					message: "Automation has no instructions",
+					i18nKey: "serverError.automation.automationHasNoInstructions",
+				});
+			}
+
 			const outcome = await dispatchAutomation({
 				automation,
 				scheduledFor: new Date(),
-				relayUrl: await resolveUserRelayUrl(automation.ownerUserId),
+				relayUrl: env.RELAY_URL,
 			});
 
 			if (outcome.status === "conflict") {
-				throw new TRPCError({
+				throw userError({
 					code: "CONFLICT",
 					message: "A run for this automation is already in progress.",
+					i18nKey: "serverError.automation.aRunForThisAutomation",
 				});
 			}
+			// The message is the host's own wording, so there is nothing to
+			// translate — but the code travels with it so the client picks its
+			// guidance without reading the prose.
 			if (outcome.status === "dispatch_failed") {
 				throw new TRPCError({
 					code: "INTERNAL_SERVER_ERROR",
 					message: outcome.error,
+					cause: { automationErrorCode: outcome.errorCode },
 				});
 			}
 			if (outcome.status === "skipped_offline") {
 				throw new TRPCError({
 					code: "PRECONDITION_FAILED",
 					message: outcome.error,
+					cause: { automationErrorCode: outcome.errorCode },
 				});
 			}
 			return { automationId: automation.id, runId: outcome.runId };
@@ -763,9 +879,10 @@ export const automationRouter = {
 				.limit(1);
 
 			if (!trigger || trigger.kind !== "webhook") {
-				throw new TRPCError({
+				throw userError({
 					code: "NOT_FOUND",
 					message: "Webhook trigger not found",
+					i18nKey: "serverError.automation.webhookTriggerNotFound",
 				});
 			}
 			await getAutomationForUser(
@@ -818,9 +935,10 @@ export const automationRouter = {
 				.limit(1);
 
 			if (!trigger || trigger.kind === "webhook") {
-				throw new TRPCError({
+				throw userError({
 					code: "NOT_FOUND",
 					message: "Trigger not found",
+					i18nKey: "serverError.automation.triggerNotFound",
 				});
 			}
 			await getAutomationForUser(

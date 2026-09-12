@@ -1,74 +1,74 @@
-import { Button, HStack, Image, Text } from "@expo/ui/swift-ui";
-import {
-	aspectRatio,
-	bold,
-	buttonStyle,
-	clipped,
-	disabled,
-	foregroundStyle,
-	frame,
-	lineLimit,
-	opacity,
-	resizable,
-	tint,
-	truncationMode,
-} from "@expo/ui/swift-ui/modifiers";
+import { useLingui } from "@lingui/react/macro";
+import { Composer, type ComposerHandle } from "@superset/composer";
+import { errorMessage } from "@superset/i18n/errors";
+import { isCloudAgentId } from "@superset/shared/cloud-agent-launch";
+import { getPresetById } from "@superset/shared/host-agent-presets";
 import { useQuery } from "@tanstack/react-query";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
-import { type ReactNode, useEffect, useRef, useState } from "react";
-import {
-	Alert,
-	KeyboardAvoidingView,
-	Pressable,
-	StyleSheet,
-	View,
-} from "react-native";
-import Animated, { FadeIn, FadeOut } from "react-native-reanimated";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useEffect, useRef, useState } from "react";
+import { Alert } from "react-native";
 import type { PromptInputMessage } from "@/components/ai-elements/prompt-input";
+import { useCloudEnvironments } from "@/hooks/useCloudEnvironments";
 import type { HostWorkspaceItem } from "@/hooks/useHostWorkspaces";
+import { awaitAttachmentUploads } from "@/lib/attachments/upload";
 import { useSession } from "@/lib/auth/client";
 import { getHostServiceClientByUrl } from "@/lib/host-service/client";
+import { posthog } from "@/lib/posthog";
 import { apiClient } from "@/lib/trpc/client";
+import { useWorkspaceScope } from "@/screens/(authenticated)/(home)/hooks/useWorkspaceScope";
 import {
-	FOREGROUND,
-	GlassComposer,
-	type GlassComposerHandle,
-	MUTED,
-} from "@/screens/(authenticated)/components/GlassComposer";
-import {
-	type ChatTarget,
-	useChatTargetStore,
-} from "../../stores/chatTargetStore";
+	agentLaunchPresetId,
+	useAgentLaunchPreferences,
+} from "@/screens/(authenticated)/hooks/useAgentLaunchPreferences";
+import { useAttachmentsSheet } from "@/screens/(authenticated)/hooks/useAttachmentsSheet";
+import { useAttachmentUploads } from "@/screens/(authenticated)/hooks/useAttachmentUploads";
+import { useComposerDraft } from "@/screens/(authenticated)/hooks/useComposerDraft";
+import { useCreateTerminalWorkspace } from "@/screens/(authenticated)/hooks/useCreateTerminalWorkspace";
+import { useHostAgentConfigs } from "@/screens/(authenticated)/hooks/useHostAgentConfigs";
+import { usePasteAttachments } from "@/screens/(authenticated)/hooks/usePasteAttachments";
+import { HOME_DRAFT_KEY } from "@/screens/(authenticated)/stores/composerDraftsStore";
+import { useComposerFocusStore } from "../../stores/composerFocusStore";
 import { useAgentIconUri } from "./hooks/useAgentIconUri";
 import { useCreateCloudWorkspace } from "./hooks/useCreateCloudWorkspace";
-import { useCreateTerminalWorkspace } from "./hooks/useCreateTerminalWorkspace";
 import { useNewChatTargets } from "./hooks/useNewChatTargets";
-import { useStartWorkspaceTerminal } from "./hooks/useStartWorkspaceTerminal";
 import { useNewSessionPreferencesStore } from "./stores/newSessionPreferencesStore";
+
+/** The built-in preset a cloud workspace launches, in the shape a host config has. */
+function cloudAgentConfig(agentId: string | null) {
+	// A preset picked for a laptop may not exist in the sandbox image.
+	const wanted = agentId && isCloudAgentId(agentId) ? agentId : "claude";
+	const preset = getPresetById(wanted);
+	return preset
+		? {
+				presetId: preset.presetId,
+				label: preset.label,
+				iconId: preset.presetId,
+				command: preset.command,
+			}
+		: undefined;
+}
 
 export function NewChatWidget({
 	workspaces,
-	fixedTarget,
-	placeholder,
-	above,
 }: {
 	workspaces: HostWorkspaceItem[];
-	/**
-	 * Pins the composer to one workspace: the target/project/branch/model rows
-	 * disappear and every submit starts a chat in this workspace.
-	 */
-	fixedTarget?: ChatTarget;
-	placeholder?: string;
-	/** Rendered above the glass surface in the bottom cluster (action chips). */
-	above?: ReactNode;
 }) {
+	const { t } = useLingui();
 	const router = useRouter();
-	const insets = useSafeAreaInsets();
-	const composerRef = useRef<GlassComposerHandle>(null);
+	const composerRef = useRef<ComposerHandle>(null);
 
-	const [active, setActive] = useState(false);
+	// Whether the composer was open when a sheet took first responder, so it is
+	// restored only when it actually was.
+	const wasExpanded = useRef(false);
+	const draft = useComposerDraft(HOME_DRAFT_KEY);
+	const openAttachmentsSheet = useAttachmentsSheet(HOME_DRAFT_KEY);
+	const addPasted = usePasteAttachments(HOME_DRAFT_KEY);
+	const uploads = useAttachmentUploads(HOME_DRAFT_KEY);
+
+	// What was typed here last time, pinned at mount: a starting value handed to
+	// the composer as it is set up, never a binding.
+	const [initialDraft] = useState(() => draft.readText());
 
 	const agentId = useNewSessionPreferencesStore((state) => state.agentId);
 	const targetKey = useNewSessionPreferencesStore((state) => state.targetKey);
@@ -81,6 +81,14 @@ export function NewChatWidget({
 	const selectedTarget =
 		targets.find((target) => target.key === targetKey) ?? defaultTarget;
 	const isCloudTarget = selectedTarget?.kind === "cloud";
+	const cloudScope = useWorkspaceScope() === "cloud";
+	const environmentId = useNewSessionPreferencesStore(
+		(state) => state.environmentId,
+	);
+	const environmentsQuery = useCloudEnvironments();
+	const environments = environmentsQuery.data ?? [];
+	const selectedEnvironment =
+		environments.find((row) => row.id === environmentId) ?? environments[0];
 
 	const { data: session } = useSession();
 	const organizationId = session?.session?.activeOrganizationId ?? null;
@@ -100,7 +108,6 @@ export function NewChatWidget({
 				if (!organizationId) return null;
 				return apiClient.cloudWorkspace.listBranches.query({
 					organizationId,
-					projectId: selectedTarget.projectId,
 				});
 			}
 			return getHostServiceClientByUrl(
@@ -115,241 +122,289 @@ export function NewChatWidget({
 
 	const createTerminalWorkspace = useCreateTerminalWorkspace();
 	const createCloudWorkspace = useCreateCloudWorkspace();
-	const { data: agentConfigs } = useQuery({
-		queryKey: ["host-agent-configs", selectedTarget?.machineId ?? null],
-		// A cloud target has no host to list agents from, and create doesn't
-		// launch one (the prompt only feeds the auto-name).
-		enabled: selectedTarget !== null && !isCloudTarget,
-		staleTime: 60_000,
-		networkMode: "always" as const,
-		queryFn: async () => {
-			if (!selectedTarget) return [];
-			return getHostServiceClientByUrl(
-				selectedTarget.hostUrl,
-			).settings.agentConfigs.list.query();
-		},
+	const { data: agentConfigs } = useHostAgentConfigs({
+		machineId: selectedTarget?.machineId ?? null,
+		hostUrl: selectedTarget?.hostUrl ?? null,
+		// A cloud target has no host to list agents from; it offers the
+		// built-in presets instead (SUPER-2127 for custom ones).
+		enabled: !isCloudTarget,
 	});
-	const selectedAgent = agentConfigs?.find(
-		(config) => config.presetId === agentId,
-	);
+	const selectedAgent = isCloudTarget
+		? cloudAgentConfig(agentId)
+		: agentConfigs?.find((config) => config.presetId === agentId);
+	// A preset picked for a laptop may not exist in the sandbox; under Cloud
+	// the effective agent is the one that will actually launch.
+	const effectiveAgentId = isCloudTarget
+		? (selectedAgent?.presetId ?? "claude")
+		: agentId;
 	const agentIconUri = useAgentIconUri(selectedAgent?.iconId ?? agentId);
-	const branchLabel = baseBranch ?? branchData?.defaultBranch ?? "default";
+	// Remembered per launch preset; null means the agent's own default and
+	// nothing rides the launch. Until the host's configs answer the preset id
+	// stands in for the launch preset, so a send made before they arrive
+	// still carries the pick — the two only differ for a config whose
+	// executable is not its preset's.
+	const launchPresetId = selectedAgent
+		? agentLaunchPresetId(selectedAgent)
+		: agentId;
+	const launch = useAgentLaunchPreferences(launchPresetId);
+	const model = launch.model?.id ?? null;
+	const effort = launch.effort?.id ?? null;
+	// One dropdown after the agent, naming the model; the sheet it opens also
+	// holds the effort. An agent with only an effort flag names that instead,
+	// and one with neither shows nothing.
+	const launchOptionLabel =
+		launch.models !== undefined
+			? (launch.model?.label ?? t({ message: "Default model" }))
+			: launch.efforts.length > 0
+				? (launch.effort?.label ?? t({ message: "Default effort" }))
+				: null;
+	const launchOptions = launchOptionLabel
+		? [{ id: "launch", label: launchOptionLabel }]
+		: [];
+	// Null until the branch list resolves. The previous fallback was the literal
+	// string "default", which reads as a branch name and is not one.
+	const branchLabel = baseBranch ?? branchData?.defaultBranch ?? null;
 
-	const storeTarget = useChatTargetStore((state) => state.target);
-	const clearChatTarget = useChatTargetStore((state) => state.clearTarget);
-	const chatTarget = fixedTarget ?? storeTarget;
-	const startWorkspaceTerminal = useStartWorkspaceTerminal(workspaces);
-
+	// Only a request made after mount counts: the store keeps the last nonce,
+	// and a remount that read it as "positive" would focus without anyone
+	// asking.
+	const focusNonce = useComposerFocusStore((state) => state.focusNonce);
+	const seenFocusNonce = useRef(focusNonce);
 	useEffect(() => {
-		if (storeTarget) composerRef.current?.focus();
-	}, [storeTarget]);
+		if (focusNonce === seenFocusNonce.current) return;
+		seenFocusNonce.current = focusNonce;
+		composerRef.current?.focus();
+	}, [focusNonce]);
 
+	// A send now begins with an await — the attachment uploads — so the
+	// mutation's own `isPending` no longer covers the whole of it. Without a
+	// lock taken before that await, a second tap slips through the gap and
+	// creates a second workspace with its own id.
+	const sending = useRef(false);
+	const [isHoldingSend, setIsHoldingSend] = useState(false);
 	const isSending =
+		isHoldingSend ||
 		createTerminalWorkspace.isPending ||
-		createCloudWorkspace.isPending ||
-		startWorkspaceTerminal.isPending;
+		createCloudWorkspace.isPending;
 
-	const dismiss = () => {
-		clearChatTarget();
-		composerRef.current?.blur();
+	// The draft and the tray are cleared together, on success only. The native
+	// composer's `clear()` reaches its own text and nothing else — the tray is
+	// React Native's — and the old React Native form used to clear both, so
+	// splitting them silently left attachments behind after every send.
+	const clearComposer = () => {
+		composerRef.current?.clear();
+		draft.clear();
 	};
 
-	const submit = (message: PromptInputMessage) => {
-		if (chatTarget) {
-			startWorkspaceTerminal
-				.mutateAsync({ target: chatTarget, message, agentId })
-				.then(() => {
-					clearChatTarget();
-					composerRef.current?.clear();
-				})
-				.catch(() => {});
-			return;
+	const submit = async (message: PromptInputMessage) => {
+		if (sending.current) return;
+		sending.current = true;
+		setIsHoldingSend(true);
+		try {
+			await send(message);
+		} finally {
+			sending.current = false;
+			setIsHoldingSend(false);
 		}
+	};
+
+	const send = async (message: PromptInputMessage) => {
+		posthog.capture("chat_message_sent", {
+			has_attachments: message.attachments.length > 0,
+			attachment_count: message.attachments.length,
+			message_length: message.text.trim().length,
+			draft_restored: initialDraft.length > 0,
+			agent: effectiveAgentId,
+			model,
+			effort,
+			destination: isCloudTarget ? "new_cloud_workspace" : "new_workspace",
+		});
 		if (!selectedTarget) {
-			Alert.alert("No project available");
+			Alert.alert(
+				t({
+					message: "No project available",
+				}),
+			);
 			return;
 		}
 		if (selectedTarget.kind === "cloud") {
-			createCloudWorkspace
+			await createCloudWorkspace
 				.mutateAsync({
-					target: selectedTarget,
 					branch: baseBranch ?? branchData?.defaultBranch ?? null,
+					environmentId: selectedEnvironment?.id ?? null,
+					agent: effectiveAgentId,
+					model,
+					effort,
 					message,
 				})
 				.then(() => {
 					setBaseBranch(null);
-					composerRef.current?.clear();
+					clearComposer();
 				})
 				.catch(() => {});
 			return;
 		}
-		createTerminalWorkspace
-			.mutateAsync({ target: selectedTarget, baseBranch, agentId, message })
-			.then((result) => {
-				if (!result.agents[0]?.ok) return;
+		// Before the create is recorded, so the failed screen's retry replays
+		// ids rather than URIs the cleared draft no longer has. Usually
+		// instant: the upload started when the file was attached, and the ring
+		// on the thumbnail is what shows the rare case where it has not
+		// finished.
+		let attachmentFileIds: string[];
+		try {
+			attachmentFileIds = await awaitAttachmentUploads(
+				HOME_DRAFT_KEY,
+				message.attachments,
+			);
+		} catch (error) {
+			Alert.alert(
+				t({ message: "Could not attach files" }),
+				errorMessage(error),
+			);
+			return;
+		}
+		await createTerminalWorkspace
+			.mutateAsync({
+				target: selectedTarget,
+				baseBranch,
+				branchLabel,
+				agentId,
+				agentLabel: selectedAgent?.label ?? "Claude",
+				model,
+				effort,
+				message,
+				attachmentFileIds,
+			})
+			.then(() => {
 				setBaseBranch(null);
-				composerRef.current?.clear();
+				clearComposer();
 			})
 			.catch(() => {});
 	};
 
-	// Collapse BOTH dimensions: a width-0 proposal makes Text wrap one glyph
-	// per line, leaving a tall invisible column that clipped() hides but layout
-	// still counts.
-	const header = fixedTarget ? undefined : (
-		<>
-			<HStack
-				spacing={6}
-				modifiers={[
-					frame({
-						width: chatTarget ? undefined : 0,
-						height: chatTarget ? undefined : 0,
-					}),
-					opacity(chatTarget ? 1 : 0),
-					clipped(),
-				]}
-			>
-				<Text modifiers={[foregroundStyle(MUTED)]}>New agent in</Text>
-				<Text
-					modifiers={[
-						bold(),
-						foregroundStyle(FOREGROUND),
-						lineLimit(1),
-						truncationMode("tail"),
-					]}
-				>
-					{chatTarget?.workspaceName ?? ""}
-				</Text>
-				<Button
-					onPress={clearChatTarget}
-					modifiers={[buttonStyle("borderless"), tint(MUTED)]}
-				>
-					<Image systemName="xmark.circle.fill" size={14} />
-				</Button>
-			</HStack>
-			<HStack
-				spacing={6}
-				modifiers={[
-					frame({
-						width: chatTarget ? 0 : undefined,
-						height: chatTarget ? 0 : undefined,
-					}),
-					opacity(chatTarget ? 0 : 1),
-					clipped(),
-				]}
-			>
-				<Button
-					label={
-						selectedTarget
-							? isCloudTarget
-								? `${selectedTarget.projectName} · Cloud`
-								: selectedTarget.projectName
-							: "No project"
-					}
-					onPress={() => {
-						void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-						router.push("/(authenticated)/(home)/new-session/project");
-					}}
-					modifiers={[
-						buttonStyle("borderless"),
-						tint(FOREGROUND),
-						disabled(targets.length === 0),
-					]}
-				/>
-				<Button
-					onPress={() => {
-						void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-						router.push("/(authenticated)/(home)/new-session/branch");
-					}}
-					modifiers={[
-						buttonStyle("borderless"),
-						tint(MUTED),
-						disabled(!selectedTarget),
-					]}
-				>
-					<HStack spacing={4}>
-						<Text>{branchLabel}</Text>
-						<Image systemName="chevron.down" size={11} />
-					</HStack>
-				</Button>
-			</HStack>
-		</>
-	);
+	// Under Cloud there is no project to show: a sandbox has no real project
+	// structure yet, so the chip is the place itself and the repo it clones is
+	// resolved without asking.
+	const headerChips = [
+		cloudScope
+			? {
+					id: "project",
+					label: t({ message: "Cloud" }),
+				}
+			: {
+					id: "project",
+					label: selectedTarget?.projectName ?? t({ message: "No project" }),
+					avatar: true,
+					iconUri: selectedTarget?.projectIconUrl ?? undefined,
+				},
+		...(cloudScope
+			? [
+					{
+						id: "environment",
+						label:
+							selectedEnvironment?.name ??
+							t({
+								message: "Environment",
+							}),
+					},
+				]
+			: []),
+		...(branchLabel ? [{ id: "branch", label: branchLabel, muted: true }] : []),
+	];
 
-	// No agent chip for a cloud target: nothing launches on create (parity
-	// with desktop; the sandbox-side launch is a follow-up).
-	const agentPicker =
-		fixedTarget || isCloudTarget ? undefined : (
-			<Button
-				onPress={() => {
-					void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-					router.push("/(authenticated)/(home)/new-session/agent");
-				}}
-				modifiers={[buttonStyle("borderless"), tint(FOREGROUND)]}
-			>
-				<HStack spacing={5}>
-					{agentIconUri ? (
-						<Image
-							uiImage={agentIconUri}
-							modifiers={[
-								resizable(),
-								aspectRatio({ contentMode: "fit" }),
-								frame({ width: 15, height: 15 }),
-							]}
-						/>
-					) : null}
-					<Text>{selectedAgent?.label ?? "Claude"}</Text>
-					<Image systemName="chevron.down" size={11} />
-				</HStack>
-			</Button>
-		);
+	const selectedModel = {
+		id: effectiveAgentId ?? "claude",
+		label: selectedAgent?.label ?? "Claude",
+		iconUri: agentIconUri ?? undefined,
+	};
 
+	// No KeyboardAvoidingView, no absolute-fill backdrop, no safe-area padding:
+	// the native composer owns its own keyboard tracking, dimming and dismissal.
 	return (
-		<View
-			testID="home-screen"
-			pointerEvents="box-none"
-			style={StyleSheet.absoluteFill}
-		>
-			<KeyboardAvoidingView
-				behavior="padding"
-				pointerEvents="box-none"
-				style={{ flex: 1, justifyContent: "flex-end" }}
-			>
-				{active ? (
-					<Animated.View
-						entering={FadeIn.duration(200)}
-						exiting={FadeOut.duration(150)}
-						style={[
-							StyleSheet.absoluteFill,
-							{ backgroundColor: "rgba(0, 0, 0, 0.45)" },
-						]}
-					>
-						<Pressable
-							accessibilityLabel="Dismiss keyboard"
-							onPress={dismiss}
-							style={StyleSheet.absoluteFill}
-						/>
-					</Animated.View>
-				) : null}
-				<View
-					className="px-3"
-					style={{ paddingBottom: active ? 8 : insets.bottom + 8 }}
-				>
-					<GlassComposer
-						ref={composerRef}
-						above={above}
-						header={header}
-						toolbarLeading={agentPicker}
-						isSending={isSending}
-						// A picked workspace target holds the composer open so its
-						// chip stays visible; a fixed target is ambient and doesn't.
-						keepExpanded={storeTarget !== null}
-						onActiveChange={setActive}
-						onSubmit={submit}
-						placeholder={placeholder ?? "Plan, ask, build..."}
-					/>
-				</View>
-			</KeyboardAvoidingView>
-		</View>
+		<Composer
+			ref={composerRef}
+			placeholder={t({
+				message: "Plan, ask, build...",
+			})}
+			initialDraft={initialDraft}
+			isSending={isSending}
+			onDictationError={(message: string) => Alert.alert(message)}
+			attachments={draft.attachments.map((item) => ({
+				id: item.id,
+				uri: item.uri ?? "",
+				kind: item.type === "image" ? ("image" as const) : ("file" as const),
+				name: item.name,
+				// Dropped the moment the id lands, so a settled tray draws no
+				// rings — only what is still in flight is marked.
+				progress: uploads[item.id]?.fileId
+					? undefined
+					: uploads[item.id]?.progress,
+				failed: uploads[item.id]?.error !== undefined,
+			}))}
+			headerChips={headerChips}
+			selectedModel={selectedModel}
+			launchOptions={launchOptions}
+			onLaunchOptionPress={() => {
+				if (!launchPresetId) return;
+				void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+				router.push({
+					pathname: "/(authenticated)/(home)/new-session/model",
+					params: {
+						presetId: launchPresetId,
+						agentLabel: selectedAgent?.label ?? "",
+					},
+				});
+			}}
+			onSubmit={(text) => void submit({ text, attachments: draft.attachments })}
+			onDraftChange={draft.setText}
+			onRemoveAttachment={(id) => draft.remove(id)}
+			onExpandedChange={(expanded) => {
+				if (expanded && !wasExpanded.current) {
+					posthog.capture("new_session_started", {
+						target_kind: selectedTarget?.kind ?? null,
+						agent: effectiveAgentId,
+					});
+				}
+				wasExpanded.current = expanded;
+			}}
+			onPaste={addPasted}
+			onAttachmentsPress={() => {
+				void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+				const restore = wasExpanded.current;
+				openAttachmentsSheet({
+					onClosed: () => {
+						if (restore) composerRef.current?.focus();
+					},
+				});
+			}}
+			onModelPress={() => {
+				void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+				router.push({
+					pathname: "/(authenticated)/(home)/new-session/agent",
+					params: { machineId: selectedTarget?.machineId ?? "" },
+				});
+			}}
+			onChipPress={(id) => {
+				if (id === "project" && cloudScope) return;
+				void Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+				if (id === "environment") {
+					router.push("/(authenticated)/(home)/new-session/environment");
+				} else if (id === "project") {
+					if (targets.length > 0) {
+						router.push({
+							pathname: "/(authenticated)/(home)/new-session/project",
+							params: { selectedKey: selectedTarget?.key ?? "" },
+						});
+					}
+				} else if (selectedTarget) {
+					router.push({
+						pathname: "/(authenticated)/(home)/new-session/branch",
+						params: {
+							projectId: selectedTarget.projectId,
+							machineId: selectedTarget.machineId,
+						},
+					});
+				}
+			}}
+		/>
 	);
 }

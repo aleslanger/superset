@@ -1,5 +1,23 @@
 import { COMPANY } from "@superset/shared/constants";
 
+const WELCOME_AI_AGENTS = [
+	"GPTBot",
+	"ChatGPT-User",
+	"OAI-SearchBot",
+	"ClaudeBot",
+	"Claude-User",
+	"Claude-SearchBot",
+	"anthropic-ai",
+	"PerplexityBot",
+	"Perplexity-User",
+	"Google-Extended",
+	"GoogleOther",
+	"Applebot-Extended",
+	"DuckAssistBot",
+	"Meta-ExternalAgent",
+	"ora-agent",
+];
+
 export function GET() {
 	const baseUrl = COMPANY.MARKETING_URL;
 
@@ -8,26 +26,9 @@ User-Agent: *
 Allow: /
 Allow: /api/llms.txt
 Disallow: /api/
-Disallow: /_next/
 
 # AI assistants and AI search crawlers: explicitly welcome
-User-Agent: ChatGPT-User
-Allow: /
-
-User-Agent: OAI-SearchBot
-Allow: /
-
-User-Agent: Claude-User
-Allow: /
-
-User-Agent: Claude-SearchBot
-Allow: /
-
-User-Agent: PerplexityBot
-Allow: /
-
-User-Agent: GoogleOther
-Allow: /
+${WELCOME_AI_AGENTS.map((agent) => `User-Agent: ${agent}\nAllow: /`).join("\n\n")}
 
 # Bulk-scraping crawlers: not welcome
 User-Agent: CCBot
@@ -46,6 +47,12 @@ Sitemap: ${baseUrl}/sitemap.xml
 		headers: {
 			"Content-Type": "text/plain; charset=utf-8",
 			"Cache-Control": "public, max-age=3600, s-maxage=3600",
+			// Discovery links are HTTP metadata, not robots.txt directives.
+			// Google reports custom Agentmap/schemamap lines as syntax errors.
+			Link: [
+				`<${baseUrl}/.well-known/ai-catalog.json>; rel="describedby"; type="application/json"`,
+				`<${baseUrl}/schemamap.xml>; rel="describedby"; type="application/xml"`,
+			].join(", "),
 		},
 	});
 }

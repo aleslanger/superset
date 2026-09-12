@@ -5,22 +5,20 @@ import { db } from "@superset/db/client";
 import { v2WorkspaceTypeValues } from "@superset/db/enums";
 import { type SelectV2Workspace, users } from "@superset/db/schema";
 import type { TRPCRouterRecord } from "@trpc/server";
-import { TRPCError } from "@trpc/server";
 import { eq } from "drizzle-orm";
 import { Resend } from "resend";
 import { z } from "zod";
 import { env } from "../../env";
-import { posthog } from "../../lib/analytics";
-import { jwtProcedure, protectedProcedure } from "../../trpc";
+import { jwtProcedure, protectedProcedure, userError } from "../../trpc";
 
 const resend = new Resend(env.RESEND_API_KEY);
 const ACTIVATION_EVENT_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 
 // Emits `user.activated`, the exit condition of the Resend activation email
 // automation — a user who created a real workspace stops receiving nudges.
-async function exitActivationEmailCampaign(userId: string, email: string) {
+async function exitActivationEmailCampaign(userId: string) {
 	const user = await db.query.users.findFirst({
-		columns: { createdAt: true },
+		columns: { createdAt: true, email: true },
 		where: eq(users.id, userId),
 	});
 	const isRecentSignup =
@@ -29,7 +27,7 @@ async function exitActivationEmailCampaign(userId: string, email: string) {
 
 	const { error } = await resend.events.send({
 		event: "user.activated",
-		email,
+		email: user.email,
 		payload: { userId },
 	});
 	if (error) {
@@ -102,6 +100,9 @@ export const v2WorkspaceRouter = {
 			},
 		),
 
+	// Exits the Resend activation campaign, and captures nothing: the host-service
+	// already emits `workspace_created` for the same workspace, so a capture here
+	// double-counts it.
 	trackCreated: jwtProcedure
 		.input(
 			z.object({
@@ -115,28 +116,15 @@ export const v2WorkspaceRouter = {
 		)
 		.mutation(async ({ ctx, input }) => {
 			if (!ctx.organizationIds.includes(input.organizationId)) {
-				throw new TRPCError({
+				throw userError({
 					code: "FORBIDDEN",
 					message: "Not a member of this organization",
+					i18nKey: "serverError.v2Workspace.notAMemberOfThisOrganization",
 				});
 			}
 
-			posthog.capture({
-				distinctId: ctx.userId,
-				event: "workspace_created",
-				properties: {
-					workspace_id: input.workspaceId,
-					project_id: input.projectId,
-					organization_id: input.organizationId,
-					host_id: input.hostId ?? null,
-					branch: input.branch,
-					type: input.type,
-					source: "host-report",
-				},
-			});
-
-			if (input.type !== "main" && ctx.email) {
-				await exitActivationEmailCampaign(ctx.userId, ctx.email);
+			if (input.type !== "main") {
+				await exitActivationEmailCampaign(ctx.userId);
 			}
 
 			return { ok: true };

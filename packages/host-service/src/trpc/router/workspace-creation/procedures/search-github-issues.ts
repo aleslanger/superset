@@ -1,5 +1,9 @@
 import type { Octokit } from "@octokit/rest";
 import { z } from "zod";
+import {
+	isGithubNotFoundError,
+	isGithubRateLimitError,
+} from "../../../../runtime/pull-requests/utils/github-errors";
 import { protectedProcedure } from "../../../index";
 import { normalizeGitHubQuery } from "../normalize-github-query";
 import { githubSearchInputSchema } from "../schemas";
@@ -8,8 +12,7 @@ import {
 	chunkProjectRepos,
 	formatRepoList,
 	githubRateLimitError,
-	isGithubNotFoundError,
-	isGithubRateLimitError,
+	githubRequestError,
 	mergeByUpdatedAtDesc,
 	type ProjectRepo,
 	projectIdForSearchItem,
@@ -386,11 +389,10 @@ export const searchGitHubIssues = protectedProcedure
 				page,
 			};
 		} catch (err) {
-			if (isGithubRateLimitError(err)) throw githubRateLimitError(err);
 			console.warn(
 				"[workspaceCreation.searchGitHubIssues] octokit fallback failed",
 				err,
 			);
-			throw err;
+			throw githubRequestError(err, ctx.credentials);
 		}
 	});

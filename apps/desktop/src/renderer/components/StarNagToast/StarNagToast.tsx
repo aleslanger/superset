@@ -1,3 +1,4 @@
+import { Trans, useLingui } from "@lingui/react/macro";
 import { toast } from "@superset/ui/sonner";
 import { X } from "lucide-react";
 import { useEffect } from "react";
@@ -10,6 +11,7 @@ import { track } from "renderer/lib/analytics";
 import { useStarNagStore } from "renderer/stores/star-nag";
 
 function StarNagToastContent({ toastId }: { toastId: string | number }) {
+	const { t } = useLingui();
 	const { state, activate, isBusy } = useGithubStarAction();
 	const dismiss = useStarNagStore((s) => s.dismiss);
 
@@ -36,23 +38,27 @@ function StarNagToastContent({ toastId }: { toastId: string | number }) {
 	}
 
 	return (
-		<div className="w-[356px] rounded-lg border border-border bg-popover p-4 shadow-lg select-text">
+		<div className="group/star-toast w-[356px] rounded-lg border border-border bg-popover p-4 shadow-lg select-text">
 			<div className="flex items-start justify-between gap-2">
 				<p className="text-sm font-semibold text-popover-foreground">
-					You're all set!
+					<Trans>You're all set!</Trans>
 				</p>
 				<button
 					type="button"
 					onClick={handleClose}
-					aria-label="Dismiss"
-					className="text-muted-foreground transition-colors hover:text-foreground"
+					aria-label={t({
+						message: "Dismiss",
+					})}
+					className="text-muted-foreground transition-[color,opacity] hover:text-foreground [@media(hover:hover)]:opacity-0 group-hover/star-toast:opacity-100 group-focus-within/star-toast:opacity-100 group-focus-within/toast:opacity-100"
 				>
 					<X className="size-3.5" />
 				</button>
 			</div>
 			<p className="mt-1 text-xs text-muted-foreground">
-				If you're enjoying Superset so far, a GitHub star helps other developers
-				discover it.
+				<Trans>
+					If you're enjoying Superset so far, a GitHub star helps other
+					developers discover it.
+				</Trans>
 			</p>
 			{/* A "loading" or "unknown" read isn't trustworthy enough to act on —
 			same rule as every other star-nag surface — so the button just doesn't

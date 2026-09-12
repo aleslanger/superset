@@ -1,29 +1,19 @@
-import { ScrollArea } from "@superset/ui/scroll-area";
-import { useQuery } from "@tanstack/react-query";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useMemo } from "react";
-import { MarkdownRenderer } from "renderer/components/MarkdownRenderer";
+import { useLingui } from "@lingui/react/macro";
+import { cn } from "@superset/ui/utils";
+import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 import { useHostUrl } from "renderer/hooks/host-service/useHostTargetUrl";
-import { getHostServiceClientByUrl } from "renderer/lib/host-service-client";
-import { resolveProjectFilterParams } from "renderer/routes/_authenticated/_dashboard/components/ProjectFilter/project-filter-utils";
-import { WorkItemDetailHeader } from "renderer/routes/_authenticated/_dashboard/components/WorkItemDetailHeader";
+import { WindowControlsInset } from "renderer/routes/_authenticated/_dashboard/components/WindowControlsInset";
 import { WorkItemDetailState } from "renderer/routes/_authenticated/_dashboard/components/WorkItemDetailState";
 import { useProjectHost } from "renderer/routes/_authenticated/_dashboard/hooks/useProjectHost";
-import { PullRequestChecksSection } from "renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestChecksSection";
+import { PullRequestDetailHeader } from "renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestDetailHeader";
+import { PullRequestListToggle } from "renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestListToggle";
+import { PullRequestSummaryContent } from "renderer/routes/_authenticated/_dashboard/pull-requests/components/PullRequestSummaryContent";
+import { usePullRequestDetail } from "renderer/routes/_authenticated/_dashboard/pull-requests/hooks/usePullRequestDetail";
+import { resolvePullRequestDetail } from "renderer/routes/_authenticated/_dashboard/pull-requests/utils/resolvePullRequestDetail";
 import { parsePositiveIntegerParam } from "renderer/routes/_authenticated/_dashboard/utils/parsePositiveIntegerParam";
-import {
-	normalizePRState,
-	PRIcon,
-} from "renderer/screens/main/components/PRIcon";
-import {
-	type LinkedPR,
-	useNewWorkspaceDraftStore,
-} from "renderer/stores/new-workspace-draft";
-import { useOpenNewWorkspaceModal } from "renderer/stores/new-workspace-modal";
 import { Route as PullRequestsLayoutRoute } from "../layout";
-import { pullRequestsSearchFromFilters } from "../stores/pullRequestsFilterStore";
-import { normalizeAuthorFilter } from "../utils/normalizeAuthorFilter";
-import { normalizePullRequestReviewFilter } from "../utils/pullRequestReviewFilter";
+import { PullRequestCodeTab } from "./components/PullRequestCodeTab";
 
 export const Route = createFileRoute(
 	"/_authenticated/_dashboard/pull-requests/$prNumber/",
@@ -31,11 +21,27 @@ export const Route = createFileRoute(
 	component: PullRequestDetailPage,
 });
 
+type DetailTab = "summary" | "code";
+
 function PullRequestDetailPage() {
+	const { t } = useLingui();
+	const detailTabs: ReadonlyArray<{ value: DetailTab; label: string }> = [
+		{
+			value: "summary",
+			label: t({
+				message: "Summary",
+			}),
+		},
+		{
+			value: "code",
+			label: t({
+				message: "Code",
+			}),
+		},
+	];
 	const { prNumber: prNumberRaw } = Route.useParams();
 	const prNumber = parsePositiveIntegerParam(prNumberRaw);
 	const search = PullRequestsLayoutRoute.useSearch();
-	const navigate = useNavigate();
 	const projectId = search.project ?? null;
 	const {
 		hostId,
@@ -43,208 +49,108 @@ function PullRequestDetailPage() {
 		project,
 	} = useProjectHost(projectId);
 	const hostUrl = useHostUrl(hostId ?? undefined);
-	const updateDraft = useNewWorkspaceDraftStore((state) => state.updateDraft);
-	const selectProject = useNewWorkspaceDraftStore(
-		(state) => state.selectProject,
-	);
-	const resetDraft = useNewWorkspaceDraftStore((state) => state.resetDraft);
-	const openModal = useOpenNewWorkspaceModal();
+	const [activeTab, setActiveTab] = useState<DetailTab>("summary");
 
-	// `project` identifies this PR's repo, not the list filter: falling back
-	// to it would rewrite an "all repositories" view to a single repo on back.
-	const backSearch = useMemo(
-		() =>
-			pullRequestsSearchFromFilters({
-				search: search.search ?? "",
-				projectFilters: resolveProjectFilterParams(search.projects, null, []),
-				authorFilter: normalizeAuthorFilter(search.author),
-				reviewFilter: normalizePullRequestReviewFilter(search.review),
-				includeClosed: search.state === "all",
-			}),
-		[
-			search.author,
-			search.projects,
-			search.review,
-			search.search,
-			search.state,
-		],
-	);
-
-	const { data, isLoading, error, refetch } = useQuery({
-		queryKey: ["pull-request-detail", projectId, hostUrl, prNumber],
-		queryFn: async () => {
-			if (!hostUrl || !projectId || prNumber === null) return null;
-			const client = getHostServiceClientByUrl(hostUrl);
-			return client.pullRequests.getContent.query({
-				projectId,
-				prNumber,
-			});
-		},
-		enabled: !!hostUrl && !!project && !!projectId && prNumber !== null,
-		staleTime: 30_000,
-		gcTime: 10 * 60_000,
+	const { data, isLoading, error, refetch } = usePullRequestDetail({
+		projectId,
+		hostUrl,
+		prNumber,
+		enabled: !!project,
 	});
 
-	const handleBack = () => {
-		navigate({ to: "/pull-requests", search: backSearch });
-	};
-
-	const handleAddToWorkspace = () => {
-		if (!projectId || !hostId || !data) return;
-		const linkedPR: LinkedPR = {
-			prNumber: data.number,
-			title: data.title,
-			url: data.url,
-			state: normalizePRState(data.state, data.isDraft),
-		};
-		resetDraft();
-		selectProject(projectId);
-		updateDraft({ hostId, linkedPR });
-		openModal(projectId);
-	};
-
-	const defaultState = normalizePRState("open", false);
-	const state = data
-		? normalizePRState(data.state, data.isDraft)
-		: defaultState;
+	// The list pane is always visible in the split view (or reachable via the
+	// list-collapse toggle in the shared layout), so there's no "back"
+	// affordance here — just the PR identity and its actions.
 	const header = (
-		<WorkItemDetailHeader
-			itemNumber={data?.number ?? prNumber}
-			icon={<PRIcon state={state} className="size-4 shrink-0" />}
-			backLabel="Back to pull requests"
-			externalLabel="Open pull request in GitHub"
-			url={data?.url ?? null}
-			onBack={handleBack}
-			onAddToWorkspace={data ? handleAddToWorkspace : null}
-		/>
+		<div className="flex shrink-0 flex-col border-b border-border">
+			<div className="flex h-10 shrink-0 items-center gap-1 px-4">
+				<PullRequestListToggle />
+				<div className="ml-2 flex items-center gap-1">
+					{detailTabs.map(({ value, label }) => (
+						<button
+							key={value}
+							type="button"
+							onClick={() => setActiveTab(value)}
+							aria-current={activeTab === value ? "true" : undefined}
+							className={cn(
+								"rounded-md px-2 py-1 text-xs font-medium transition-colors",
+								activeTab === value
+									? "bg-accent text-foreground"
+									: "text-muted-foreground hover:text-foreground",
+							)}
+						>
+							{label}
+						</button>
+					))}
+				</div>
+				{/* Window-drag leaf standing in for the hidden TopBar. */}
+				<div className="drag h-full min-w-0 flex-1" />
+				{/* Share and the "..." overflow (close/reopen) are coming soon —
+				    both hidden until they have real functionality wired up. */}
+				<WindowControlsInset />
+			</div>
+			<PullRequestDetailHeader
+				projectId={projectId}
+				hostId={hostId}
+				hostUrl={hostUrl}
+				prNumber={prNumber}
+				data={data}
+				isLoading={isLoading}
+			/>
+		</div>
 	);
 
-	if (prNumber === null) {
+	const resolved = resolvePullRequestDetail({
+		prNumber,
+		projectId,
+		areProjectsReady,
+		hasProject: !!project,
+		hostUrl,
+		isLoading,
+		error,
+		data,
+		refetch: () => void refetch(),
+	});
+
+	if (resolved.status === "fallback") {
 		return (
 			<div className="flex min-h-0 flex-1 flex-col">
 				{header}
 				<WorkItemDetailState
-					message="This pull request link is invalid."
-					isError
+					message={resolved.message}
+					isLoading={resolved.isLoading}
+					isError={resolved.isError}
+					onRetry={resolved.onRetry}
 				/>
 			</div>
 		);
 	}
-
-	if (!projectId) {
-		return (
-			<div className="flex min-h-0 flex-1 flex-col">
-				{header}
-				<WorkItemDetailState message="Choose a project from Pull requests before opening a pull request." />
-			</div>
-		);
-	}
-
-	if (!project) {
-		return (
-			<div className="flex min-h-0 flex-1 flex-col">
-				{header}
-				<WorkItemDetailState
-					message={
-						areProjectsReady
-							? "This project is no longer available on your devices."
-							: "Loading project…"
-					}
-					isLoading={!areProjectsReady}
-					isError={areProjectsReady}
-				/>
-			</div>
-		);
-	}
-
-	if (!hostId || !hostUrl) {
-		return (
-			<div className="flex min-h-0 flex-1 flex-col">
-				{header}
-				<WorkItemDetailState
-					message="The device that hosts this project is unavailable."
-					isError
-				/>
-			</div>
-		);
-	}
-
-	if (isLoading) {
-		return (
-			<div className="flex min-h-0 flex-1 flex-col">
-				{header}
-				<WorkItemDetailState message="Loading pull request…" isLoading />
-			</div>
-		);
-	}
-
-	if (error instanceof Error || !data) {
-		return (
-			<div className="flex min-h-0 flex-1 flex-col">
-				{header}
-				<WorkItemDetailState
-					message={
-						error instanceof Error ? error.message : "Pull request not found."
-					}
-					isError
-					onRetry={() => void refetch()}
-				/>
-			</div>
-		);
-	}
-
-	const stateLabel = data.isDraft ? "Draft" : data.state;
-	const branchSummary = data.branch
-		? `${data.headRepositoryOwner && data.isCrossRepository ? `${data.headRepositoryOwner}:${data.branch}` : data.branch} → ${data.baseBranch}`
-		: null;
 
 	return (
 		<div className="@container flex min-h-0 flex-1 flex-col">
 			{header}
-			<ScrollArea className="min-h-0 flex-1">
-				<div className="mx-auto grid w-full max-w-6xl gap-8 px-4 py-6 @md:px-6 @4xl:grid-cols-[minmax(0,1fr)_20rem] @4xl:py-8">
-					<article className="min-w-0">
-						<div className="mb-4 flex min-w-0 items-start gap-3">
-							<PRIcon state={state} className="mt-1 size-5 shrink-0" />
-							<h1 className="min-w-0 break-words text-2xl font-semibold leading-tight text-wrap-pretty">
-								{data.title}
-							</h1>
-						</div>
-
-						<div className="mb-7 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-							<span>{project.name}</span>
-							<span aria-hidden>·</span>
-							<span className="capitalize">{stateLabel}</span>
-							{data.author && (
-								<>
-									<span aria-hidden>·</span>
-									<span className="min-w-0 break-words">by {data.author}</span>
-								</>
-							)}
-							{branchSummary && (
-								<>
-									<span aria-hidden>·</span>
-									<span className="min-w-0 break-all font-mono">
-										{branchSummary}
-									</span>
-								</>
-							)}
-						</div>
-
-						{data.body.trim() ? (
-							<MarkdownRenderer content={data.body} />
-						) : (
-							<p className="text-sm italic text-muted-foreground">
-								No description provided.
-							</p>
-						)}
-					</article>
-
-					<aside className="min-w-0 @4xl:sticky @4xl:top-6 @4xl:self-start">
-						<PullRequestChecksSection checks={data.checks} />
-					</aside>
-				</div>
-			</ScrollArea>
+			{/* Kept mounted (hidden via CSS, not unmounted) so Radix's
+			 *  ScrollArea instance survives a tab switch and away — swapping
+			 *  it out of a ternary would reset scrollTop every time the
+			 *  reviewer comes back from the Code tab. The Code tab itself
+			 *  still mounts/unmounts with the ternary below: it isn't a
+			 *  simple scroll container (its own virtualized diff viewer
+			 *  manages scrolling internally), and keeping its polling/agent
+			 *  subscriptions alive while hidden isn't worth the tradeoff. */}
+			<div
+				className={cn("min-h-0 flex-1", activeTab !== "summary" && "hidden")}
+			>
+				<PullRequestSummaryContent data={resolved.data} />
+			</div>
+			{activeTab === "code" && (
+				<PullRequestCodeTab
+					projectId={resolved.projectId}
+					prNumber={resolved.data.number}
+					prUrl={resolved.data.url}
+					hostUrl={resolved.hostUrl}
+					hostId={hostId}
+				/>
+			)}
 		</div>
 	);
 }

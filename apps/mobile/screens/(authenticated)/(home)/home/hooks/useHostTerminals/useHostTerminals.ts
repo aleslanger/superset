@@ -33,7 +33,10 @@ const ATTENTION_PRIORITY: Record<TerminalAttention, number> = {
 export interface TerminalRowData {
 	terminalId: string;
 	workspaceId: string;
+	/** What to show: the name the user gave the session, else the shell's. */
 	title: string;
+	/** The user's name on its own, for prefilling a rename. */
+	customTitle: string | null;
 	ts: number;
 	/** Session creation time — the stable ordering key for tab strips. */
 	createdAt: number;
@@ -41,6 +44,8 @@ export interface TerminalRowData {
 	lastEventAt: number | null;
 	/** Agent bound to the terminal via lifecycle hooks; null = plain shell. */
 	agentId: string | null;
+	/** Specific agent definition (a custom config id, or the preset id). */
+	definitionId: string | null;
 	attention: TerminalAttention | null;
 }
 
@@ -155,10 +160,12 @@ export function useHostsTerminals(
 					terminalId: session.terminalId,
 					workspaceId: session.workspaceId,
 					title: session.title ?? (binding ? binding.agentId : "Terminal"),
+					customTitle: session.customTitle,
 					ts: binding?.lastEventAt ?? session.createdAt,
 					createdAt: session.createdAt,
 					lastEventAt: binding?.lastEventAt ?? null,
 					agentId: binding?.agentId ?? null,
+					definitionId: binding?.definitionId ?? binding?.agentId ?? null,
 					attention,
 				};
 				const group = terminalsByWorkspace.get(session.workspaceId);

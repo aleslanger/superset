@@ -1,6 +1,6 @@
 import type { workspaceTrpc } from "@superset/workspace-client";
 import type { FsWatchEvent } from "@superset/workspace-fs/client";
-import { isImageFile, isVideoFile } from "shared/file-types";
+import { isImageFile, isPdfFile, isVideoFile } from "shared/file-types";
 import type {
 	ConflictResolution,
 	ConflictState,
@@ -70,7 +70,7 @@ function isBinaryText(content: string): boolean {
 	return false;
 }
 
-function decodeBase64(value: string): Uint8Array {
+export function decodeBase64(value: string): Uint8Array {
 	if (typeof Buffer !== "undefined") {
 		return new Uint8Array(Buffer.from(value, "base64"));
 	}
@@ -92,7 +92,9 @@ async function loadEntry(
 ): Promise<void> {
 	const client = entry.trpcClient;
 	const readAsBinary =
-		isImageFile(entry.absolutePath) || isVideoFile(entry.absolutePath);
+		isImageFile(entry.absolutePath) ||
+		isVideoFile(entry.absolutePath) ||
+		isPdfFile(entry.absolutePath);
 	const maxBytes = options.unlimited ? undefined : DEFAULT_MAX_BYTES;
 	try {
 		const result = await client.filesystem.readFile.query({

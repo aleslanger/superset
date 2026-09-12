@@ -5,11 +5,12 @@
 
 import { randomUUID } from "node:crypto";
 import { Worker } from "node:worker_threads";
-import type {
-	SerializedWorkerError,
-	WorkerShutdownRequestMessage,
-	WorkerTaskRequestMessage,
-	WorkerTaskResponseMessage,
+import {
+	isWorkerTaskPhaseMessage,
+	type SerializedWorkerError,
+	type WorkerShutdownRequestMessage,
+	type WorkerTaskRequestMessage,
+	type WorkerTaskResponseMessage,
 } from "./worker-task-protocol.ts";
 
 export class WorkerTaskError extends Error {
@@ -23,10 +24,18 @@ export class WorkerTaskError extends Error {
 	}
 }
 
+/** Why the runner gave up on a task on purpose; none of these is a worker
+ * failure. Kept as a field rather than read back out of the message so the
+ * tRPC boundary never has to match on our own wording. */
+export type WorkerTaskAbortKind = "disposed" | "superseded" | "cancelled";
+
 export class WorkerTaskAbortedError extends Error {
-	constructor(message = "Worker task aborted") {
+	public readonly kind: WorkerTaskAbortKind;
+
+	constructor(kind: WorkerTaskAbortKind, message = "Worker task aborted") {
 		super(message);
 		this.name = "WorkerTaskAbortedError";
+		this.kind = kind;
 	}
 }
 
@@ -81,6 +90,8 @@ interface QueuedTask {
 	timeoutMs: number;
 	timeoutHandle?: NodeJS.Timeout;
 	slotId?: number;
+	/** Last phase the handler reported, if it reports any. */
+	phase?: string;
 }
 
 export const DEFAULT_TIMEOUT_MS = 60_000;
@@ -214,7 +225,7 @@ export class WorkerTaskRunner {
 		for (const taskId of [...this.queue]) {
 			this.rejectTask(
 				taskId,
-				new WorkerTaskAbortedError("Worker runner disposed"),
+				new WorkerTaskAbortedError("disposed", "Worker runner disposed"),
 			);
 		}
 		this.queue.length = 0;
@@ -224,7 +235,7 @@ export class WorkerTaskRunner {
 			if (slot.activeTaskId) {
 				this.rejectTask(
 					slot.activeTaskId,
-					new WorkerTaskAbortedError("Worker runner disposed"),
+					new WorkerTaskAbortedError("disposed", "Worker runner disposed"),
 				);
 			}
 			exits.push(
@@ -305,7 +316,10 @@ export class WorkerTaskRunner {
 					if (!task) continue;
 
 					if (task.abortSignal?.aborted) {
-						this.rejectTask(task.taskId, new WorkerTaskAbortedError());
+						this.rejectTask(
+							task.taskId,
+							new WorkerTaskAbortedError("cancelled"),
+						);
 						continue;
 					}
 
@@ -402,6 +416,13 @@ export class WorkerTaskRunner {
 		const slot = this.workerSlots.get(slotId);
 		if (!slot) return;
 
+		if (isWorkerTaskPhaseMessage(message)) {
+			if (slot.activeTaskId !== message.taskId) return;
+			const active = this.tasks.get(message.taskId);
+			if (active) active.phase = message.phase;
+			return;
+		}
+
 		if (!this.isWorkerResultMessage(message)) {
 			return;
 		}
@@ -434,7 +455,10 @@ export class WorkerTaskRunner {
 			) {
 				this.rejectTask(
 					task.taskId,
-					new WorkerTaskAbortedError("Task superseded by a newer request"),
+					new WorkerTaskAbortedError(
+						"superseded",
+						"Task superseded by a newer request",
+					),
 				);
 			} else {
 				this.resolveTask(task.taskId, response.result);
@@ -476,10 +500,14 @@ export class WorkerTaskRunner {
 		const task = this.tasks.get(taskId);
 		if (!task) return;
 
+		// Name the phase when the handler reported one: the timer knows only
+		// that the budget expired, and the worker is retired right below, so
+		// this is the sole record of what was still running.
+		const phaseSuffix = task.phase ? ` in phase "${task.phase}"` : "";
 		this.rejectTask(
 			taskId,
 			new WorkerTaskError(
-				`[${this.name}] Task "${task.taskType}" timed out after ${task.timeoutMs}ms`,
+				`[${this.name}] Task "${task.taskType}" timed out after ${task.timeoutMs}ms${phaseSuffix}`,
 			),
 		);
 
@@ -499,7 +527,7 @@ export class WorkerTaskRunner {
 		const task = this.tasks.get(taskId);
 		if (!task) return;
 
-		this.rejectTask(taskId, new WorkerTaskAbortedError());
+		this.rejectTask(taskId, new WorkerTaskAbortedError("cancelled"));
 
 		if (task.slotId) {
 			const slot = this.workerSlots.get(task.slotId);
@@ -543,7 +571,10 @@ export class WorkerTaskRunner {
 			this.queue.splice(i, 1);
 			this.rejectTask(
 				queuedTask.taskId,
-				new WorkerTaskAbortedError("Task superseded by a newer request"),
+				new WorkerTaskAbortedError(
+					"superseded",
+					"Task superseded by a newer request",
+				),
 			);
 		}
 	}

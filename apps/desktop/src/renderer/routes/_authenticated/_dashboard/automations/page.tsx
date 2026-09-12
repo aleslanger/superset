@@ -1,3 +1,7 @@
+import { plural } from "@lingui/core/macro";
+import { Trans, useLingui } from "@lingui/react/macro";
+import { i18n } from "@superset/i18n";
+import { errorMessage } from "@superset/i18n/errors";
 import { COMPANY } from "@superset/shared/constants";
 import { describeSchedule } from "@superset/shared/rrule";
 import type { RouterOutputs } from "@superset/trpc";
@@ -37,16 +41,14 @@ import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
-	LuCircleHelp,
-	LuPlus,
 	LuRotateCw,
 	LuSearch,
 	LuSearchX,
-	LuSparkles,
 	LuTerminal,
 	LuTriangleAlert,
 	LuX,
 } from "react-icons/lu";
+import { GATED_FEATURES, usePaywall } from "renderer/components/Paywall";
 import { useRecentProjects } from "renderer/hooks/host-projects/useRecentProjects";
 import { useNow } from "renderer/hooks/useNow";
 import { useV2AgentChoices } from "renderer/hooks/useV2AgentChoices";
@@ -54,6 +56,7 @@ import { apiTrpcClient } from "renderer/lib/api-trpc-client";
 import { authClient } from "renderer/lib/auth-client";
 import { cloudTrpc } from "renderer/lib/cloud-trpc";
 import { DATA_TABLE_HEAD_CELL } from "renderer/routes/_authenticated/_dashboard/components/DataTableHeader";
+import { FeatureHeader } from "renderer/routes/_authenticated/_dashboard/components/FeatureHeader";
 import {
 	SortableHeader,
 	type SortDirection,
@@ -65,11 +68,10 @@ import { useWorkspaceCreates } from "renderer/stores/workspace-creates";
 import { AutomationRow } from "./components/AutomationRow";
 import { AutomationStatCards } from "./components/AutomationStatCards";
 import { AutomationsEmptyState } from "./components/AutomationsEmptyState";
-import { CreateAutomationDialog } from "./components/CreateAutomationDialog";
 import { HostOfflineRunDialog } from "./components/HostOfflineRunDialog";
 import type { AutomationTemplate } from "./templates";
-import { isHostOfflineError } from "./utils/hostOfflineError";
-import { isStaleAgentError, STALE_AGENT_HELP } from "./utils/staleAgentError";
+import { matchAgentChoice, portableAgentValue } from "./utils/agentIdentity";
+import { dispatchErrorCode, runErrorHelp } from "./utils/runErrorHelp";
 
 export const Route = createFileRoute("/_authenticated/_dashboard/automations/")(
 	{
@@ -89,19 +91,24 @@ type AutomationSortField = "name" | "owner" | "schedule" | "status";
 const AUTOMATION_AGENT_PROMPT =
 	"Help me create a Superset automation. Use the superset:automate skill if it's available, otherwise the `superset` CLI (start with `superset automations --help`). Ask me what should run on a schedule, confirm the cadence, target project, and agent, then create the automation and trigger a first run so we can review the result together.";
 
+const DEFAULT_TIMEZONE =
+	Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+
 function settledErrorMessage(result: PromiseSettledResult<unknown>) {
 	return result.status === "rejected" && result.reason instanceof Error
 		? result.reason.message
 		: null;
 }
 
+function settledErrorCode(result: PromiseSettledResult<unknown>) {
+	return result.status === "rejected" ? dispatchErrorCode(result.reason) : null;
+}
+
 function AutomationsPage() {
+	const { t } = useLingui();
 	const { data: session } = authClient.useSession();
 	const currentUserId = session?.user?.id;
 
-	const [createOpen, setCreateOpen] = useState(false);
-	const [initialTemplate, setInitialTemplate] =
-		useState<AutomationTemplate | null>(null);
 	const [scope, setScope] = useState<Scope>("mine");
 	const [search, setSearch] = useState("");
 	const [cliHintDismissed, setCliHintDismissed] = useState(false);
@@ -138,18 +145,29 @@ function AutomationsPage() {
 		}) => apiTrpcClient.automation.runNow.mutate({ id }),
 		onMutate: ({ id }) => addRetrying([id]),
 		onSettled: (_data, _error, { id }) => removeRetrying([id]),
-		onSuccess: (_, { name }) => toast.success(`Running "${name}" now`),
+		onSuccess: (_, { name }) =>
+			toast.success(
+				t({
+					message: `Running "${name}" now`,
+				}),
+			),
 		onError: (error, { targetHostId }) => {
-			const message = error instanceof Error ? error.message : null;
-			if (isHostOfflineError(message)) {
+			const code = dispatchErrorCode(error);
+			if (code === "host_offline") {
 				setHostOfflineRun({ hostId: targetHostId });
 				return;
 			}
-			if (isStaleAgentError(message)) {
-				toast.error(STALE_AGENT_HELP);
+			const help = runErrorHelp(code);
+			if (help) {
+				toast.error(i18n._(help));
 				return;
 			}
-			toast.error(message ?? "Failed to trigger run");
+			toast.error(
+				(error instanceof Error ? error.message : null) ??
+					t({
+						message: "Failed to trigger run",
+					}),
+			);
 		},
 	});
 
@@ -173,30 +191,40 @@ function AutomationsPage() {
 			const retried = outcomes.length - failed.length;
 			if (retried > 0) {
 				toast.success(
-					retried === 1
-						? "Retrying 1 automation"
-						: `Retrying ${retried} automations`,
+					t({
+						message: plural(retried, {
+							one: "Retrying # automation",
+							other: "Retrying # automations",
+						}),
+					}),
 				);
 			}
 			if (failed.length === 0) return;
-			const offline = failed.find((o) =>
-				isHostOfflineError(settledErrorMessage(o.result)),
+			const offline = failed.find(
+				(o) => settledErrorCode(o.result) === "host_offline",
 			);
 			if (offline) {
 				setHostOfflineRun({ hostId: offline.automation.targetHostId });
 			}
 			// The host-offline dialog explains those failures; only toast the rest.
 			const other = failed.filter(
-				(o) => !isHostOfflineError(settledErrorMessage(o.result)),
+				(o) => settledErrorCode(o.result) !== "host_offline",
 			);
 			if (other.length === 0) return;
-			const message = settledErrorMessage(other[0].result);
+			const help = runErrorHelp(settledErrorCode(other[0].result));
+			const single =
+				(help ? i18n._(help) : settledErrorMessage(other[0].result)) ??
+				t({
+					message: "Failed to retry automation",
+				});
+			const failedCount = other.length;
+			const totalCount = outcomes.length;
 			toast.error(
 				other.length === 1
-					? isStaleAgentError(message)
-						? STALE_AGENT_HELP
-						: (message ?? "Failed to retry automation")
-					: `Failed to retry ${other.length} of ${outcomes.length} automations`,
+					? single
+					: t({
+							message: `Failed to retry ${failedCount} of ${totalCount} automations`,
+						}),
 			);
 		},
 	});
@@ -215,11 +243,24 @@ function AutomationsPage() {
 		onSuccess: (_, { id, enabled, name }) => {
 			void utils.automation.list.invalidate();
 			void utils.automation.get.invalidate({ id });
-			toast.success(enabled ? `"${name}" resumed` : `"${name}" paused`);
+			toast.success(
+				enabled
+					? t({
+							message: `"${name}" resumed`,
+						})
+					: t({
+							message: `"${name}" paused`,
+						}),
+			);
 		},
 		onError: (error) =>
 			toast.error(
-				error instanceof Error ? error.message : "Failed to update automation",
+				errorMessage(
+					error,
+					t({
+						message: "Failed to update automation",
+					}),
+				),
 			),
 	});
 
@@ -229,11 +270,20 @@ function AutomationsPage() {
 		onSuccess: (_, { name }) => {
 			void utils.automation.list.invalidate();
 			setPendingDelete(null);
-			toast.success(`"${name}" deleted`);
+			toast.success(
+				t({
+					message: `"${name}" deleted`,
+				}),
+			);
 		},
 		onError: (error) =>
 			toast.error(
-				error instanceof Error ? error.message : "Failed to delete automation",
+				errorMessage(
+					error,
+					t({
+						message: "Failed to delete automation",
+					}),
+				),
 			),
 	});
 
@@ -244,7 +294,7 @@ function AutomationsPage() {
 		error: automationsError,
 		refetch: refetchAutomations,
 	} = cloudTrpc.automation.list.useQuery(undefined, {
-		refetchInterval: 15_000,
+		refetchInterval: 60_000,
 	});
 
 	const { data: memberRows = [] } = cloudTrpc.organization.listMembers.useQuery(
@@ -372,7 +422,9 @@ function AutomationsPage() {
 				case "schedule":
 					return automation.rrule
 						? describeSchedule(automation.rrule)
-						: "Event triggered";
+						: automation.triggerCount > 0
+							? "Event triggered"
+							: "No triggers";
 				case "status":
 					return automation.enabled ? "active" : "paused";
 			}
@@ -406,15 +458,81 @@ function AutomationsPage() {
 		[visible, failedIds],
 	);
 
-	const handleSelectTemplate = (template: AutomationTemplate) => {
-		setInitialTemplate(template);
-		setCreateOpen(true);
-	};
-
 	const navigate = useNavigate();
 	const { machineId, activeHostUrl } = useLocalHostService();
 	const { agents: agentChoices } = useV2AgentChoices(activeHostUrl);
 	const { submit: submitWorkspaceCreate } = useWorkspaceCreates();
+	// Automations are Pro. Creating, running, and resuming go through the
+	// paywall; the server refuses the same three, so this is the friendly
+	// front of one gate. Pausing, editing, and deleting stay open so a
+	// downgraded org keeps control of what it has.
+	const { gateFeature, hasAccess, isReady: planReady } = usePaywall();
+	const showProBadge = planReady && !hasAccess(GATED_FEATURES.AUTOMATIONS);
+
+	// Cursor-style creation: no dialog. "New automation" writes an untitled
+	// automation with no triggers and opens its detail page, which is the
+	// editor; a template pre-fills name/prompt/schedule the same way.
+	const createMutation = useMutation({
+		mutationFn: (template: AutomationTemplate | null) => {
+			const stored = window.localStorage.getItem(AGENT_STORAGE_KEY);
+			// Template preference first (iconId is a legacy fallback, as in the
+			// old dialog), then the last-used agent, then the first host agent.
+			const choice =
+				(template?.agentType
+					? (matchAgentChoice(agentChoices, template.agentType) ??
+						agentChoices.find((option) => option.iconId === template.agentType))
+					: null) ??
+				(stored ? matchAgentChoice(agentChoices, stored) : null) ??
+				agentChoices[0];
+			if (!choice) throw new Error("No agent available yet");
+			return apiTrpcClient.automation.create.mutate({
+				name: template
+					? i18n._(template.name)
+					: t({
+							message: "Untitled",
+						}),
+				prompt: template?.prompt ?? "",
+				// Preset slug when unambiguous — instance UUIDs die when the host's
+				// agent-config table is re-seeded, orphaning the automation.
+				agent: portableAgentValue(agentChoices, choice),
+				targetHostId: machineId ?? null,
+				v2ProjectId: recentProjects.find((p) => p != null)?.id ?? null,
+				...(template?.rrule
+					? { rrule: template.rrule, timezone: DEFAULT_TIMEZONE }
+					: { triggers: [] }),
+			});
+		},
+		onSuccess: (result) => {
+			void utils.automation.list.invalidate();
+			void navigate({
+				to: "/automations/$automationId",
+				params: { automationId: result.id },
+			});
+		},
+		onError: (error) => {
+			// Raw Postgres errors are multi-line SQL dumps — keep the first line.
+			const message =
+				error instanceof Error ? error.message.split("\n")[0]?.trim() : null;
+			toast.error(
+				message ||
+					t({
+						message: "Failed to create automation",
+					}),
+			);
+		},
+	});
+
+	const handleSelectTemplate = (template: AutomationTemplate) => {
+		if (createMutation.isPending) return;
+		gateFeature(GATED_FEATURES.AUTOMATIONS, () =>
+			createMutation.mutate(template),
+		);
+	};
+
+	const handleCreateManually = () => {
+		if (createMutation.isPending) return;
+		gateFeature(GATED_FEATURES.AUTOMATIONS, () => createMutation.mutate(null));
+	};
 
 	// Opens a project-less agent session seeded with automation-creation
 	// instructions. The in-app "superset" chat agent can't run the CLI, so
@@ -422,8 +540,15 @@ function AutomationsPage() {
 	const [creatingWithAgent, setCreatingWithAgent] = useState(false);
 	const handleCreateWithAgent = () => {
 		if (creatingWithAgent) return;
+		gateFeature(GATED_FEATURES.AUTOMATIONS, startCreateWithAgent);
+	};
+	const startCreateWithAgent = () => {
 		if (!machineId) {
-			toast.error("Host service is not running");
+			toast.error(
+				t({
+					message: "Host service is not running",
+				}),
+			);
 			return;
 		}
 		const terminalAgents = agentChoices.filter((a) => a.id !== "superset");
@@ -431,7 +556,11 @@ function AutomationsPage() {
 		const agent =
 			terminalAgents.find((a) => a.id === stored)?.id ?? terminalAgents[0]?.id;
 		if (!agent) {
-			toast.error("No terminal agent is configured on this device");
+			toast.error(
+				t({
+					message: "No terminal agent is configured on this device",
+				}),
+			);
 			return;
 		}
 		setCreatingWithAgent(true);
@@ -450,11 +579,6 @@ function AutomationsPage() {
 			to: "/v2-workspace/$workspaceId",
 			params: { workspaceId },
 		}).catch(() => {});
-	};
-
-	const handleDialogOpenChange = (next: boolean) => {
-		setCreateOpen(next);
-		if (!next) setInitialTemplate(null);
 	};
 
 	const scheduleWidth = scope === "team" ? "w-[16%]" : "w-[18%]";
@@ -490,19 +614,24 @@ function AutomationsPage() {
 			isOwner={automation.ownerUserId === currentUserId}
 			isRetrying={retryingIds.has(automation.id)}
 			onRunNow={(a) =>
-				runNowMutation.mutate({
-					id: a.id,
-					name: a.name,
-					targetHostId: a.targetHostId,
-				})
+				gateFeature(GATED_FEATURES.AUTOMATIONS, () =>
+					runNowMutation.mutate({
+						id: a.id,
+						name: a.name,
+						targetHostId: a.targetHostId,
+					}),
+				)
 			}
-			onToggleEnabled={(a) =>
-				setEnabledMutation.mutate({
-					id: a.id,
-					enabled: !a.enabled,
-					name: a.name,
-				})
-			}
+			onToggleEnabled={(a) => {
+				const toggle = () =>
+					setEnabledMutation.mutate({
+						id: a.id,
+						enabled: !a.enabled,
+						name: a.name,
+					});
+				if (a.enabled) toggle();
+				else gateFeature(GATED_FEATURES.AUTOMATIONS, toggle);
+			}}
 			onDelete={setPendingDelete}
 		/>
 	);
@@ -528,53 +657,18 @@ function AutomationsPage() {
 
 			<div className="min-h-0 flex-1 overflow-y-auto">
 				<div className="mx-auto flex min-h-full w-full max-w-5xl flex-col px-8 pb-12">
-					<div className="flex items-center justify-between">
-						<h1 className="text-xl font-semibold tracking-tight">
-							Automations
-						</h1>
-						<div className="flex items-center gap-2">
-							<Tooltip>
-								<TooltipTrigger asChild>
-									<Button
-										asChild
-										variant="ghost"
-										size="icon-sm"
-										className="size-8 text-muted-foreground"
-									>
-										<a
-											href={`${COMPANY.DOCS_URL}/automations`}
-											target="_blank"
-											rel="noreferrer"
-											aria-label="Automations docs"
-										>
-											<LuCircleHelp className="size-4" />
-										</a>
-									</Button>
-								</TooltipTrigger>
-								<TooltipContent>Automations docs</TooltipContent>
-							</Tooltip>
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								className="h-8 gap-1.5 px-3"
-								disabled={creatingWithAgent}
-								onClick={handleCreateWithAgent}
-							>
-								<LuSparkles className="size-4" />
-								<span>Create with AI</span>
-							</Button>
-							<Button
-								type="button"
-								size="sm"
-								className="h-8 gap-1.5 px-3"
-								onClick={() => setCreateOpen(true)}
-							>
-								<LuPlus className="size-4" />
-								<span>New automation</span>
-							</Button>
-						</div>
-					</div>
+					<FeatureHeader
+						title={<Trans>Automations</Trans>}
+						docsUrl={`${COMPANY.DOCS_URL}/automations`}
+						onCreate={handleCreateWithAgent}
+						isCreating={creatingWithAgent}
+						showCreate={!orgEmpty}
+						secondaryAction={{
+							label: <Trans>New automation</Trans>,
+							onSelect: handleCreateManually,
+							disabled: createMutation.isPending,
+						}}
+					/>
 
 					{/* Zero-count stats and search are noise while a tab is empty;
 					    with nothing in the org at all the tabs go too. */}
@@ -607,7 +701,9 @@ function AutomationsPage() {
 										value="mine"
 										className="h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground"
 									>
-										<span className="text-sm">Mine</span>
+										<span className="text-sm">
+											<Trans>Mine</Trans>
+										</span>
 										<span className="ml-1 tabular-nums text-xs text-muted-foreground">
 											{mineCount}
 										</span>
@@ -616,7 +712,9 @@ function AutomationsPage() {
 										value="team"
 										className="h-8 rounded-md px-3 data-[state=active]:bg-accent data-[state=active]:text-foreground data-[state=inactive]:text-muted-foreground"
 									>
-										<span className="text-sm">Team</span>
+										<span className="text-sm">
+											<Trans>Team</Trans>
+										</span>
 										<span className="ml-1 tabular-nums text-xs text-muted-foreground">
 											{teamCount}
 										</span>
@@ -634,7 +732,11 @@ function AutomationsPage() {
 													size="sm"
 													className="h-8 gap-1.5 px-3"
 													disabled={retryAllMutation.isPending}
-													onClick={() => retryAllMutation.mutate(failedMine)}
+													onClick={() =>
+														gateFeature(GATED_FEATURES.AUTOMATIONS, () =>
+															retryAllMutation.mutate(failedMine),
+														)
+													}
 												>
 													<LuRotateCw
 														className={cn(
@@ -642,14 +744,18 @@ function AutomationsPage() {
 															retryAllMutation.isPending && "animate-spin",
 														)}
 													/>
-													<span>Retry all</span>
+													<span>
+														<Trans>Retry all</Trans>
+													</span>
 													<span className="tabular-nums text-xs text-muted-foreground">
 														{failedMine.length}
 													</span>
 												</Button>
 											</TooltipTrigger>
 											<TooltipContent>
-												Retry every automation whose last run failed
+												<Trans>
+													Retry every automation whose last run failed
+												</Trans>
 											</TooltipContent>
 										</Tooltip>
 									)}
@@ -658,8 +764,12 @@ function AutomationsPage() {
 										<Input
 											value={search}
 											onChange={(e) => setSearch(e.target.value)}
-											placeholder="Search"
-											aria-label="Search automations"
+											placeholder={t({
+												message: "Search",
+											})}
+											aria-label={t({
+												message: "Search automations",
+											})}
 											className="h-8 w-44 pl-8"
 										/>
 									</div>
@@ -684,11 +794,15 @@ function AutomationsPage() {
 									>
 										<LuTriangleAlert />
 									</EmptyMedia>
-									<EmptyTitle>Couldn't load automations</EmptyTitle>
+									<EmptyTitle>
+										<Trans>Couldn't load automations</Trans>
+									</EmptyTitle>
 									<EmptyDescription className="select-text cursor-text">
-										{automationsError instanceof Error
-											? automationsError.message
-											: "The request failed."}
+										{automationsError instanceof Error ? (
+											automationsError.message
+										) : (
+											<Trans>The request failed.</Trans>
+										)}
 									</EmptyDescription>
 								</EmptyHeader>
 								<Button
@@ -699,7 +813,9 @@ function AutomationsPage() {
 									}}
 								>
 									<LuRotateCw className="size-4" />
-									<span>Try again</span>
+									<span>
+										<Trans>Try again</Trans>
+									</span>
 								</Button>
 							</Empty>
 						) : showMineEmptyState ? (
@@ -707,6 +823,10 @@ function AutomationsPage() {
 								<AutomationsEmptyState
 									onSelectTemplate={handleSelectTemplate}
 									onCreateWithAgent={handleCreateWithAgent}
+									isCreating={creatingWithAgent}
+									onCreateManually={handleCreateManually}
+									isCreatingManually={createMutation.isPending}
+									showProBadge={showProBadge}
 								/>
 							</div>
 						) : showTeamEmptyState ? (
@@ -718,9 +838,13 @@ function AutomationsPage() {
 									>
 										<LuSearchX />
 									</EmptyMedia>
-									<EmptyTitle>No team automations</EmptyTitle>
+									<EmptyTitle>
+										<Trans>No team automations</Trans>
+									</EmptyTitle>
 									<EmptyDescription>
-										Nobody on your team has shared automations yet.
+										<Trans>
+											Nobody on your team has shared automations yet.
+										</Trans>
 									</EmptyDescription>
 								</EmptyHeader>
 							</Empty>
@@ -737,7 +861,9 @@ function AutomationsPage() {
 											<TableHead className={cn(DATA_TABLE_HEAD_CELL, "pl-4")}>
 												<SortableHeader
 													field="name"
-													label="Name"
+													label={t({
+														message: "Name",
+													})}
 													sortField={sortField}
 													sortDirection={sortDirection}
 													onSort={handleSort}
@@ -749,7 +875,9 @@ function AutomationsPage() {
 												>
 													<SortableHeader
 														field="owner"
-														label="Owner"
+														label={t({
+															message: "Owner",
+														})}
 														sortField={sortField}
 														sortDirection={sortDirection}
 														onSort={handleSort}
@@ -761,7 +889,9 @@ function AutomationsPage() {
 											>
 												<SortableHeader
 													field="schedule"
-													label="Schedule"
+													label={t({
+														message: "Schedule",
+													})}
 													sortField={sortField}
 													sortDirection={sortDirection}
 													onSort={handleSort}
@@ -772,7 +902,9 @@ function AutomationsPage() {
 											>
 												<SortableHeader
 													field="status"
-													label="Status"
+													label={t({
+														message: "Status",
+													})}
 													sortField={sortField}
 													sortDirection={sortDirection}
 													onSort={handleSort}
@@ -783,7 +915,9 @@ function AutomationsPage() {
 											>
 												{/* Sortable heads are buttons, which Chrome's UA sheet
 												    exempts from the header's `uppercase` — match them. */}
-												<span className="normal-case">Last run</span>
+												<span className="normal-case">
+													<Trans>Last run</Trans>
+												</span>
 											</TableHead>
 											<TableHead
 												className={cn(DATA_TABLE_HEAD_CELL, "w-20 pr-4")}
@@ -797,7 +931,7 @@ function AutomationsPage() {
 													colSpan={columnCount}
 													className="h-24 text-center text-sm text-muted-foreground"
 												>
-													No automations match
+													<Trans>No automations match</Trans>
 												</TableCell>
 											</TableRow>
 										) : sortField ? (
@@ -805,11 +939,26 @@ function AutomationsPage() {
 										) : (
 											<>
 												{needsAttention.length > 0 &&
-													sectionRow("Needs attention", true)}
+													sectionRow(
+														t({
+															message: "Needs attention",
+														}),
+														true,
+													)}
 												{needsAttention.map(renderAutomationRow)}
-												{upNext.length > 0 && sectionRow("Up next")}
+												{upNext.length > 0 &&
+													sectionRow(
+														t({
+															message: "Up next",
+														}),
+													)}
 												{upNext.map(renderAutomationRow)}
-												{pausedVisible.length > 0 && sectionRow("Paused")}
+												{pausedVisible.length > 0 &&
+													sectionRow(
+														t({
+															message: "Paused",
+														}),
+													)}
 												{pausedVisible.map(renderAutomationRow)}
 											</>
 										)}
@@ -823,18 +972,20 @@ function AutomationsPage() {
 						<div className="relative mt-4 flex items-center gap-2.5 rounded-lg border border-border/60 px-3 py-2 pr-9">
 							<LuTerminal className="size-3.5 shrink-0 text-muted-foreground" />
 							<p className="min-w-0 truncate text-xs text-muted-foreground">
-								Tell any agent to use the{" "}
-								<code className="select-text cursor-text rounded bg-accent/60 px-1 py-0.5 font-mono text-[11px] text-foreground">
-									superset
-								</code>{" "}
-								CLI to spin up workspaces, run tasks, or manage automations.{" "}
+								<Trans>
+									Tell any agent to use the{" "}
+									<code className="select-text cursor-text rounded bg-accent/60 px-1 py-0.5 font-mono text-[11px] text-foreground">
+										superset
+									</code>{" "}
+									CLI to spin up workspaces, run tasks, or manage automations.
+								</Trans>{" "}
 								<a
 									href={`${COMPANY.DOCS_URL}/cli/getting-started`}
 									target="_blank"
 									rel="noreferrer"
 									className="font-medium text-foreground underline underline-offset-2 hover:text-foreground/80"
 								>
-									CLI docs
+									<Trans>CLI docs</Trans>
 								</a>
 							</p>
 							<Button
@@ -842,7 +993,9 @@ function AutomationsPage() {
 								variant="ghost"
 								size="icon-sm"
 								onClick={() => setCliHintDismissed(true)}
-								aria-label="Dismiss"
+								aria-label={t({
+									message: "Dismiss",
+								})}
 								className="absolute right-1.5 top-1/2 size-6 -translate-y-1/2 text-muted-foreground hover:text-foreground"
 							>
 								<LuX className="size-3.5" />
@@ -851,13 +1004,6 @@ function AutomationsPage() {
 					)}
 				</div>
 			</div>
-
-			<CreateAutomationDialog
-				open={createOpen}
-				onOpenChange={handleDialogOpenChange}
-				initialTemplate={initialTemplate}
-				onCreated={() => handleDialogOpenChange(false)}
-			/>
 
 			<HostOfflineRunDialog
 				hostId={hostOfflineRun?.hostId ?? null}
@@ -875,18 +1021,22 @@ function AutomationsPage() {
 			>
 				<AlertDialogContent>
 					<AlertDialogHeader>
-						<AlertDialogTitle>Delete automation?</AlertDialogTitle>
+						<AlertDialogTitle>
+							<Trans>Delete automation?</Trans>
+						</AlertDialogTitle>
 						<AlertDialogDescription>
 							{pendingDelete ? (
-								<>
+								<Trans>
 									"{pendingDelete.name}" will stop firing and its run history
 									will be removed. This can't be undone.
-								</>
+								</Trans>
 							) : null}
 						</AlertDialogDescription>
 					</AlertDialogHeader>
 					<AlertDialogFooter>
-						<AlertDialogCancel>Cancel</AlertDialogCancel>
+						<AlertDialogCancel>
+							<Trans>Cancel</Trans>
+						</AlertDialogCancel>
 						<AlertDialogAction
 							disabled={deleteMutation.isPending}
 							onClick={() => {
@@ -898,7 +1048,7 @@ function AutomationsPage() {
 								}
 							}}
 						>
-							Delete
+							<Trans>Delete</Trans>
 						</AlertDialogAction>
 					</AlertDialogFooter>
 				</AlertDialogContent>

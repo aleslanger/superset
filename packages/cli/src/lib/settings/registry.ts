@@ -1,4 +1,5 @@
 import { CLIError } from "@superset/cli-framework";
+import { SUPPORTED_LOCALES } from "@superset/i18n/locales";
 import type { InsertSettings } from "@superset/local-db/schema";
 import {
 	BRANCH_PREFIX_MODES,
@@ -55,6 +56,8 @@ const EDITOR_APPS = EXTERNAL_APPS.filter(
 // The "custom" ringtone is excluded: it requires a file uploaded through the app.
 const RINGTONE_IDS = RINGTONES.map((ringtone) => ringtone.id);
 
+const LANGUAGE_SETTING_VALUES = ["auto", ...SUPPORTED_LOCALES];
+
 const FONT_SIZE = FONT_SIZE_LIMITS;
 const LINE_HEIGHT = LINE_HEIGHT_LIMITS;
 const LETTER_SPACING = LETTER_SPACING_LIMITS;
@@ -83,6 +86,13 @@ export const SETTINGS: SettingDefinition[] = [
 		section: "behavior",
 		description: "Show the CPU/memory resource monitor",
 		defaultValue: true,
+	},
+	{
+		key: "showUsageInSidebar",
+		type: "boolean",
+		section: "usage",
+		description: "Show a Usage button in the home sidebar",
+		defaultValue: false,
 	},
 	{
 		key: "openLinksInApp",
@@ -159,6 +169,15 @@ export const SETTINGS: SettingDefinition[] = [
 		description: "Notification volume (0-100)",
 		defaultValue: 100,
 	},
+	// Appearance
+	{
+		key: "language",
+		type: "enum",
+		section: "appearance",
+		enumValues: LANGUAGE_SETTING_VALUES,
+		description: "App display language (auto follows the system language)",
+		defaultValue: "auto",
+	},
 	// Terminal
 	{
 		key: "terminalLinkBehavior",
@@ -178,10 +197,17 @@ export const SETTINGS: SettingDefinition[] = [
 		defaultValue: 12,
 	},
 	{
+		key: "terminalCopyOnSelect",
+		type: "boolean",
+		section: "terminal",
+		description: "Copy selected terminal text to the clipboard right away",
+		defaultValue: false,
+	},
+	{
 		key: "showPresetsBar",
 		type: "boolean",
 		section: "terminal",
-		description: "Show the terminal presets bar",
+		description: "Show the terminal scripts bar",
 		defaultValue: true,
 	},
 	{
@@ -195,7 +221,7 @@ export const SETTINGS: SettingDefinition[] = [
 		key: "autoApplyDefaultPreset",
 		type: "boolean",
 		section: "terminal",
-		description: "Apply the default terminal preset to new workspaces",
+		description: "Apply the default terminal script to new workspaces",
 		defaultValue: true,
 	},
 	{
@@ -340,6 +366,8 @@ export const EXCLUDED_SETTINGS_COLUMNS: Record<string, string> = {
 	agentCustomDefinitions: "structured JSON; use superset agents",
 	agentPresetPermissionsMigratedAt: "internal migration marker",
 	disabledAgentHooks: "agent-id list; use the app UI",
+	disabledSkills: "skill-name list; use the app's Plugins page",
+	installedPlugins: "structured install records; use the app's Plugins page",
 	terminalPersistence: "dead column; nothing reads it, retained for rollback",
 	deleteLocalBranch: "v2 reads renderer localStorage, unreachable externally",
 	exposeHostServiceViaRelay:

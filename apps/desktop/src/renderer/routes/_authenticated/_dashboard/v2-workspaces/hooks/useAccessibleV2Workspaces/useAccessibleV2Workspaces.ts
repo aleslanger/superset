@@ -1,13 +1,14 @@
+import { useLingui } from "@lingui/react/macro";
 import type { CheckItem } from "@superset/local-db";
 import { useLiveQuery } from "@tanstack/react-db";
 import { useQueries } from "@tanstack/react-query";
 import { useMemo } from "react";
-import { env } from "renderer/env.renderer";
 import { resolveProjectIconUrl } from "renderer/hooks/host-projects/resolveProjectIconUrl";
 import { useHostProjects } from "renderer/hooks/host-projects/useHostProjects";
 import { deriveTerminalAgentStatus } from "renderer/hooks/host-service/useTerminalAgentStatuses";
 import { useHostWorkspacesSource } from "renderer/hooks/host-workspaces/useHostWorkspaces";
-import { useHostsPresence } from "renderer/hooks/useHostsPresence";
+import { useKnownHosts } from "renderer/hooks/known-hosts/useKnownHosts";
+import { useActiveOrganizationId } from "renderer/hooks/useActiveOrganizationId";
 import { useRelayUrl } from "renderer/hooks/useRelayUrl";
 import { authClient } from "renderer/lib/auth-client";
 import { cloudTrpc } from "renderer/lib/cloud-trpc";
@@ -27,7 +28,6 @@ import { isSidebarWorkspaceVisible } from "renderer/routes/_authenticated/provid
 import { useHostWorkspaces } from "renderer/routes/_authenticated/providers/HostWorkspacesProvider";
 import { useLocalHostService } from "renderer/routes/_authenticated/providers/LocalHostServiceProvider";
 import { useV2NotificationStore } from "renderer/stores/v2-notifications";
-import { MOCK_ORG_ID } from "shared/constants";
 import { type PaneStatus, pickHigherStatus } from "shared/tabs-types";
 
 export type V2WorkspaceHostType = "local-device" | "remote-device";
@@ -96,8 +96,6 @@ export interface AccessibleV2Workspace {
 	/** Most recent agent event across the workspace's terminals (epoch ms);
 	 * null when no agent has ever run here. */
 	lastAgentEventAt: number | null;
-	/** Distinct agents bound to this workspace's terminals, most recent first. */
-	agentIds: string[];
 	/** Working-tree + against-base churn; null until the host answers. */
 	diffStats: V2WorkspaceDiffStats | null;
 	/** Non-null = archived tombstone (soft-deleted workspace). */
@@ -119,12 +117,21 @@ export interface V2WorkspaceProjectOption {
 	count: number;
 }
 
+export interface V2WorkspaceCreatorOption {
+	userId: string;
+	name: string;
+	image: string | null;
+	isCurrentUser: boolean;
+	count: number;
+}
+
 export interface UseAccessibleV2WorkspacesResult {
 	all: AccessibleV2Workspace[];
 	/** Row-source settlement — gates empty states only, never rendered rows. */
 	isReady: boolean;
 	hostOptions: V2WorkspaceHostOption[];
 	projectOptions: V2WorkspaceProjectOption[];
+	creatorOptions: V2WorkspaceCreatorOption[];
 	hostsById: Map<
 		string,
 		{ hostName: string; isOnline: boolean; isLocal: boolean }
@@ -142,6 +149,8 @@ interface UseAccessibleV2WorkspacesOptions {
 	prStateFilters?: V2WorkspacesPrStateFilter[];
 	/** Empty/omitted = any agent status. */
 	agentStatusFilters?: V2WorkspacesAgentStatusFilter[];
+	/** Creator user ids; empty/omitted = any creator. */
+	creatorFilters?: string[];
 	/** Omitted = "all" — sidebar-pinned and unpinned alike. */
 	pinFilter?: V2WorkspacesPinFilter;
 	/**
@@ -200,6 +209,17 @@ function matchesPinFilter(
 		: !workspace.isInSidebar;
 }
 
+function matchesCreatorFilters(
+	workspace: AccessibleV2Workspace,
+	creatorFilters: string[],
+): boolean {
+	if (creatorFilters.length === 0) return true;
+	return (
+		workspace.createdByUserId != null &&
+		creatorFilters.includes(workspace.createdByUserId)
+	);
+}
+
 function matchesAgentStatusFilters(
 	workspace: AccessibleV2Workspace,
 	agentStatusFilters: V2WorkspacesAgentStatusFilter[],
@@ -224,20 +244,24 @@ function useStableByWorkspaceId<T>(entries: [string, T][]): Map<string, T> {
 export function useAccessibleV2Workspaces(
 	options: UseAccessibleV2WorkspacesOptions = {},
 ): UseAccessibleV2WorkspacesResult {
+	const { t } = useLingui();
 	const searchQuery = options.searchQuery ?? "";
 	const deviceFilter = options.deviceFilter;
 	const projectFilters = options.projectFilters ?? [];
 	const prStateFilters = options.prStateFilters ?? [];
 	const agentStatusFilters = options.agentStatusFilters ?? [];
+	const creatorFilters = options.creatorFilters ?? [];
 	const pinFilter = options.pinFilter ?? "all";
 	const { data: session } = authClient.useSession();
 	const collections = useCollections();
 	const { machineId, activeHostUrl } = useLocalHostService();
 	const relayUrl = useRelayUrl();
 
-	const activeOrganizationId = env.SKIP_ENV_VALIDATION
-		? MOCK_ORG_ID
-		: (session?.session?.activeOrganizationId ?? null);
+	// Per-window org. Every row below is filtered against this id, and the rows
+	// are served by the window's own host service — so reading the shared
+	// session's org here drops all of them in any window that switched, and the
+	// dashboard renders empty.
+	const activeOrganizationId = useActiveOrganizationId();
 	const currentUserId = session?.user?.id ?? null;
 
 	// With a specific device filter (the page), rows come from a single
@@ -264,22 +288,9 @@ export function useAccessibleV2Workspaces(
 	const { workspaces: hostWorkspaces, isReady } =
 		deviceFilter === undefined ? fanoutSource : scopedSource;
 
-	const { data: rawHostRows = [] } = cloudTrpc.v2Host.list.useQuery(undefined, {
-		refetchInterval: 30_000,
-	});
-	const presence = useHostsPresence(rawHostRows);
-	const hostRows = useMemo(
-		() =>
-			presence
-				? rawHostRows.map((host) => ({
-						...host,
-						isOnline: presence.get(host.machineId) ?? host.isOnline,
-					}))
-				: rawHostRows,
-		[rawHostRows, presence],
-	);
+	const { hosts: hostRows } = useKnownHosts();
 
-	const { data: hostMemberRows = [] } = cloudTrpc.v2Host.listMembers.useQuery(
+	const { data: hostMemberRows = [] } = cloudTrpc.host.listMembers.useQuery(
 		undefined,
 		{},
 	);
@@ -406,8 +417,12 @@ export function useAccessibleV2Workspaces(
 						hostName:
 							host?.name ??
 							(workspace.hostId === machineId
-								? "This device"
-								: "Unknown device"),
+								? t({
+										message: "This device",
+									})
+								: t({
+										message: "Unknown device",
+									})),
 						hostIsOnline: host?.isOnline ?? workspace.hostReachable,
 						sidebarProjectId: null,
 						sidebarWorkspaceId: sessionSidebarState?.workspaceId ?? null,
@@ -449,7 +464,13 @@ export function useAccessibleV2Workspaces(
 					hostId: workspace.hostId,
 					hostName:
 						host?.name ??
-						(workspace.hostId === machineId ? "This device" : "Unknown device"),
+						(workspace.hostId === machineId
+							? t({
+									message: "This device",
+								})
+							: t({
+									message: "Unknown device",
+								})),
 					hostIsOnline: host?.isOnline ?? workspace.hostReachable,
 					sidebarProjectId: sidebarProjectIds.has(project.projectKey)
 						? project.projectKey
@@ -472,6 +493,7 @@ export function useAccessibleV2Workspaces(
 		sidebarProjectRows,
 		repoRows,
 		creatorRows,
+		t,
 	]);
 
 	// The authoritative link lives in host.db (`workspace.pullRequestId`), not
@@ -697,9 +719,6 @@ export function useAccessibleV2Workspaces(
 				agentStatus: agentActivityByWorkspaceId.get(row.id)?.status ?? "idle",
 				lastAgentEventAt:
 					agentActivityByWorkspaceId.get(row.id)?.lastEventAt ?? null,
-				agentIds: (agentActivityByWorkspaceId.get(row.id)?.agents ?? [])
-					.sort((a, b) => b[1] - a[1])
-					.map(([agentId]) => agentId),
 				diffStats: diffStatsByWorkspaceId.get(row.id) ?? null,
 				archivedAt: row.archivedAt,
 				archiveReason: row.archiveReason,
@@ -732,6 +751,7 @@ export function useAccessibleV2Workspaces(
 					matchesProjectFilters(workspace, projectFilters) &&
 					matchesPrStateFilters(workspace, prStateFilters) &&
 					matchesAgentStatusFilters(workspace, agentStatusFilters) &&
+					matchesCreatorFilters(workspace, creatorFilters) &&
 					matchesPinFilter(workspace, pinFilter),
 			),
 		[
@@ -739,6 +759,7 @@ export function useAccessibleV2Workspaces(
 			projectFilters,
 			prStateFilters,
 			agentStatusFilters,
+			creatorFilters,
 			pinFilter,
 		],
 	);
@@ -790,6 +811,44 @@ export function useAccessibleV2Workspaces(
 		);
 	}, [searchFiltered]);
 
+	// Anchored on org members, not the visible rows: a teammate must be
+	// filterable even while every one of their workspaces lives on a device
+	// this client can't currently reach (rows are host-served, so an offline
+	// device — or any remote device in a dev stack — contributes nothing to
+	// searchFiltered). Counts still track what's visible; row creators who
+	// have left the org keep an entry so their rows stay filterable.
+	const creatorOptions = useMemo<V2WorkspaceCreatorOption[]>(() => {
+		const byCreator = new Map<string, V2WorkspaceCreatorOption>();
+		for (const creator of creatorRows) {
+			byCreator.set(creator.id, {
+				userId: creator.id,
+				name: creator.name,
+				image: creator.image,
+				isCurrentUser: creator.id === currentUserId,
+				count: 0,
+			});
+		}
+		for (const workspace of searchFiltered) {
+			if (workspace.createdByUserId === null) continue;
+			const existing = byCreator.get(workspace.createdByUserId);
+			if (existing) {
+				existing.count += 1;
+				continue;
+			}
+			byCreator.set(workspace.createdByUserId, {
+				userId: workspace.createdByUserId,
+				name: workspace.createdByName ?? "Unknown",
+				image: workspace.createdByImage,
+				isCurrentUser: workspace.isCreatedByCurrentUser,
+				count: 1,
+			});
+		}
+		return Array.from(byCreator.values()).sort((a, b) => {
+			if (a.isCurrentUser !== b.isCurrentUser) return a.isCurrentUser ? -1 : 1;
+			return a.name.localeCompare(b.name);
+		});
+	}, [creatorRows, currentUserId, searchFiltered]);
+
 	const hostsById = useMemo(() => {
 		const map = new Map<
 			string,
@@ -831,6 +890,7 @@ export function useAccessibleV2Workspaces(
 		isReady,
 		hostOptions,
 		projectOptions,
+		creatorOptions,
 		hostsById,
 		projectsById,
 	};

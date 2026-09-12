@@ -17,8 +17,19 @@ import * as automationsResume from "./automations/resume";
 import * as automationsRun from "./automations/run";
 import * as automationsSetPrompt from "./automations/set_prompt";
 import * as automationsUpdate from "./automations/update";
+import * as cloudWorkspacesCreate from "./cloud-workspaces/create";
+import * as cloudWorkspacesDelete from "./cloud-workspaces/delete";
+import * as cloudWorkspacesList from "./cloud-workspaces/list";
 import * as hostsList from "./hosts/list";
 import * as organizationMembersList from "./organization/members/list";
+import * as pagesCommentsList from "./pages/comments/list";
+import * as pagesCommentsReply from "./pages/comments/reply";
+import * as pagesCommentsResolve from "./pages/comments/resolve";
+import * as pagesGet from "./pages/get";
+import * as pagesList from "./pages/list";
+import * as pagesPublish from "./pages/publish";
+import * as pagesPull from "./pages/pull";
+import * as pagesVersions from "./pages/versions";
 import * as projectsList from "./projects/list";
 import * as tasksCreate from "./tasks/create";
 import * as tasksDelete from "./tasks/delete";
@@ -59,6 +70,9 @@ const REGISTRARS = [
 	workspacesCreate,
 	workspacesUpdate,
 	workspacesDelete,
+	cloudWorkspacesList,
+	cloudWorkspacesCreate,
+	cloudWorkspacesDelete,
 	agentsCreate,
 	agentsList,
 	terminalsCreate,
@@ -66,6 +80,14 @@ const REGISTRARS = [
 	terminalsSend,
 	terminalsRead,
 	terminalsClose,
+	pagesList,
+	pagesGet,
+	pagesVersions,
+	pagesPull,
+	pagesPublish,
+	pagesCommentsList,
+	pagesCommentsReply,
+	pagesCommentsResolve,
 	projectsList,
 	hostsList,
 ];

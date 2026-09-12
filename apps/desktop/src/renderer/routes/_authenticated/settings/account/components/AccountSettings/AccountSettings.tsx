@@ -1,3 +1,5 @@
+import { Trans, useLingui } from "@lingui/react/macro";
+import { errorMessage } from "@superset/i18n/errors";
 import { ACCOUNT_DELETION_GRACE_DAYS } from "@superset/shared/constants";
 import {
 	AlertDialog,
@@ -30,6 +32,7 @@ import {
 	SETTING_ITEM_ID,
 	type SettingItemId,
 } from "../../../utils/settings-search";
+import { LeaderboardSection } from "./components/LeaderboardSection";
 import { ProfileSkeleton } from "./components/ProfileSkeleton";
 
 interface AccountSettingsProps {
@@ -37,6 +40,7 @@ interface AccountSettingsProps {
 }
 
 export function AccountSettings({ visibleItems }: AccountSettingsProps) {
+	const { t } = useLingui();
 	const showProfile = isItemVisible(
 		SETTING_ITEM_ID.ACCOUNT_PROFILE,
 		visibleItems,
@@ -47,6 +51,10 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 	);
 	const showDelete = isItemVisible(
 		SETTING_ITEM_ID.ACCOUNT_DELETE,
+		visibleItems,
+	);
+	const showLeaderboard = isItemVisible(
+		SETTING_ITEM_ID.ACCOUNT_LEADERBOARD,
 		visibleItems,
 	);
 
@@ -72,7 +80,12 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 			await signOut();
 		} catch (error) {
 			toast.error(
-				error instanceof Error ? error.message : "Failed to delete account",
+				errorMessage(
+					error,
+					t({
+						message: "Failed to delete account",
+					}),
+				),
 			);
 		} finally {
 			setIsDeleting(false);
@@ -103,9 +116,13 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 
 			setAvatarPreview(uploadResult.url);
 			await refetchSession();
-			toast.success("Avatar updated!");
+			toast.success(t({ message: "Avatar updated!" }));
 		} catch {
-			toast.error("Failed to update avatar");
+			toast.error(
+				t({
+					message: "Failed to update avatar",
+				}),
+			);
 		}
 	}
 
@@ -120,9 +137,13 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 		try {
 			await apiTrpcClient.user.updateProfile.mutate({ name: nameValue });
 			await refetchSession();
-			toast.success("Name updated!");
+			toast.success(t({ message: "Name updated!" }));
 		} catch {
-			toast.error("Failed to update name");
+			toast.error(
+				t({
+					message: "Failed to update name",
+				}),
+			);
 			setNameValue(user.name ?? "");
 		}
 	}
@@ -130,9 +151,11 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 	return (
 		<div className="p-6 max-w-4xl w-full">
 			<div className="mb-8">
-				<h2 className="text-xl font-semibold">Account</h2>
+				<h2 className="text-xl font-semibold">
+					<Trans>Account</Trans>
+				</h2>
 				<p className="text-sm text-muted-foreground mt-1">
-					Manage your account settings
+					<Trans>Manage your account settings</Trans>
 				</p>
 			</div>
 
@@ -142,13 +165,22 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 						<ProfileSkeleton />
 					) : user ? (
 						<>
-							<SettingRow label="Avatar" hint="Recommended size 256×256.">
+							<SettingRow
+								label={t({
+									message: "Avatar",
+								})}
+								hint={t({
+									message: "Recommended size 256×256.",
+								})}
+							>
 								<button
 									type="button"
 									onClick={handleAvatarUpload}
 									disabled={selectImageMutation.isPending}
 									className="rounded-full transition-opacity hover:opacity-80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-100"
-									aria-label="Change avatar"
+									aria-label={t({
+										message: "Change avatar",
+									})}
 								>
 									<Avatar
 										size="xl"
@@ -158,17 +190,23 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 								</button>
 							</SettingRow>
 
-							<SettingRow label="Name">
+							<SettingRow label={t({ message: "Name" })}>
 								<Input
 									value={nameValue}
 									onChange={(e) => setNameValue(e.target.value)}
 									onBlur={handleNameBlur}
-									placeholder="Your name"
+									placeholder={t({
+										message: "Your name",
+									})}
 									className="w-80"
 								/>
 							</SettingRow>
 
-							<SettingRow label="Email">
+							<SettingRow
+								label={t({
+									message: "Email",
+								})}
+							>
 								<Input
 									value={user.email}
 									readOnly
@@ -178,54 +216,83 @@ export function AccountSettings({ visibleItems }: AccountSettingsProps) {
 						</>
 					) : (
 						<p className="text-sm text-muted-foreground">
-							Unable to load user info
+							<Trans>Unable to load user info</Trans>
 						</p>
 					))}
 
 				{showSignOut && (
 					<div className={showProfile ? "pt-5" : undefined}>
 						<SettingRow
-							label="Sign out of this device"
-							hint="You'll need to sign in again to use Superset on this device."
+							label={t({
+								message: "Sign out of this device",
+							})}
+							hint={t({
+								message:
+									"You'll need to sign in again to use Superset on this device.",
+							})}
 						>
 							<Button
 								variant="outline"
 								onClick={async () => {
 									await signOut();
-									toast.success("Signed out");
+									toast.success(
+										t({
+											message: "Signed out",
+										}),
+									);
 								}}
 							>
-								Sign out
+								<Trans>Sign out</Trans>
 							</Button>
 						</SettingRow>
 					</div>
 				)}
 
+				{showLeaderboard && (
+					<div className="pt-5">
+						<LeaderboardSection />
+					</div>
+				)}
+
 				{showDelete && (
 					<div className="pt-5">
-						<SettingRow label="Delete account">
+						<SettingRow
+							label={t({
+								message: "Delete account",
+							})}
+						>
 							<AlertDialog>
 								<AlertDialogTrigger asChild>
 									<Button variant="destructive" disabled={isDeleting}>
-										{isDeleting ? "Deleting…" : "Delete account"}
+										{isDeleting ? (
+											<Trans>Deleting…</Trans>
+										) : (
+											<Trans>Delete account</Trans>
+										)}
 									</Button>
 								</AlertDialogTrigger>
 								<AlertDialogContent>
 									<AlertDialogHeader>
-										<AlertDialogTitle>Delete account?</AlertDialogTitle>
+										<AlertDialogTitle>
+											<Trans>Delete account?</Trans>
+										</AlertDialogTitle>
 										<AlertDialogDescription>
-											All of your data will be permanently deleted after{" "}
-											{ACCOUNT_DELETION_GRACE_DAYS} days — sign back in before
-											then to restore your account.
+											<Trans>
+												All of your data will be permanently deleted after{" "}
+												{ACCOUNT_DELETION_GRACE_DAYS} days — sign back in before
+												then to restore your account.
+											</Trans>
 										</AlertDialogDescription>
 									</AlertDialogHeader>
 									<AlertDialogFooter>
-										<AlertDialogCancel>Cancel</AlertDialogCancel>
+										<AlertDialogCancel>
+											<Trans>Cancel</Trans>
+										</AlertDialogCancel>
 										<AlertDialogAction
 											variant="destructive"
 											onClick={handleDeleteAccount}
 										>
-											Delete account
+											<Trans>Delete account</Trans>
 										</AlertDialogAction>
 									</AlertDialogFooter>
 								</AlertDialogContent>

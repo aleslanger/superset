@@ -13,6 +13,8 @@ import {
 	useContext,
 	useMemo,
 } from "react";
+import { useIsV2CloudEnabled } from "renderer/hooks/useIsV2CloudEnabled";
+import { useOpenNewWorkspace } from "renderer/hooks/useOpenNewWorkspace";
 import { electronTrpc } from "renderer/lib/electron-trpc";
 import { useCollections } from "renderer/routes/_authenticated/providers/CollectionsProvider";
 import { useHostWorkspaces } from "renderer/routes/_authenticated/providers/HostWorkspacesProvider";
@@ -27,6 +29,8 @@ export function CommandContextProvider({ children }: { children: ReactNode }) {
 	const matchRoute = useMatchRoute();
 	const navigate = useNavigate();
 	const collections = useCollections();
+	const isV2CloudEnabled = useIsV2CloudEnabled();
+	const openNewWorkspace = useOpenNewWorkspace();
 	const {
 		activeHostUrl,
 		activeOrganizationId,
@@ -94,7 +98,9 @@ export function CommandContextProvider({ children }: { children: ReactNode }) {
 			hostServiceStatus,
 			localMachineId: machineId ?? null,
 			notificationSoundsMuted,
+			isV2CloudEnabled,
 			navigate: navigateTo,
+			openNewWorkspace,
 		}),
 		[
 			location.pathname,
@@ -106,7 +112,9 @@ export function CommandContextProvider({ children }: { children: ReactNode }) {
 			hostServiceStatus,
 			machineId,
 			notificationSoundsMuted,
+			isV2CloudEnabled,
 			navigateTo,
+			openNewWorkspace,
 		],
 	);
 

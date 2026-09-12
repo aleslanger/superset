@@ -1,5 +1,6 @@
 import { buildHostRoutingKey } from "@superset/shared/host-routing";
 import * as Clipboard from "expo-clipboard";
+import { useFocusEffect } from "expo-router";
 import {
 	forwardRef,
 	useCallback,
@@ -7,12 +8,18 @@ import {
 	useImperativeHandle,
 	useMemo,
 	useRef,
+	useState,
 } from "react";
-import { AppState, Linking } from "react-native";
+import { AppState } from "react-native";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { withUniwind } from "uniwind";
+import { useOpenLink } from "@/hooks/useOpenLink";
 import { getHostAuthToken, getRelayUrl } from "@/lib/host/client";
 import { ensureSandboxAccess, isSandboxHost } from "@/lib/sandbox-access";
+import {
+	readWarmTerminal,
+	rememberWarmTerminal,
+} from "@/lib/terminal/warmTerminalCache";
 
 const StyledWebView = withUniwind(WebView);
 
@@ -46,6 +53,8 @@ export interface TerminalWebViewHandle {
 	retry: () => void;
 	/** Copy the select-mode selection to the clipboard and leave select mode. */
 	copySelection: () => void;
+	/** Return the viewport to the live edge of the scrollback. */
+	scrollToBottom: () => void;
 }
 
 export interface TerminalHost {
@@ -65,16 +74,32 @@ interface TerminalWebViewProps {
 	onSelectChange?: (select: TerminalSelectState) => void;
 	/** Select-mode text landed on the clipboard (either copy path). */
 	onCopied?: () => void;
+	/** A plain tap on the terminal — not a link, not a long-press. The screen
+	 *  uses it to dismiss the keyboard, since no overlay sits above the
+	 *  WebView any more (an overlay would eat scroll drags). */
+	onTap?: () => void;
+	/** The viewport reached or left the bottom of the scrollback — drives the
+	 *  scroll-to-bottom button, which lives outside the WebView. */
+	onScrollChange?: (atBottom: boolean) => void;
 }
 
 type PageMessage =
 	| { type: "ready" }
-	| { type: "dial"; id: number; replay: "0" | "1" }
+	| { type: "dial"; id: number; seq: string }
+	| {
+			type: "snapshot";
+			terminalId: string;
+			data: string;
+			epoch: string | null;
+			seq: number;
+	  }
 	| { type: "state"; state: TerminalConnectionState }
 	| { type: "control"; message: TerminalControlMessage }
 	| { type: "openUrl"; url: string }
 	| { type: "copy"; text: string }
-	| { type: "select"; active: boolean; hasSelection: boolean };
+	| { type: "select"; active: boolean; hasSelection: boolean }
+	| { type: "tap" }
+	| { type: "scroll"; atBottom: boolean };
 
 /**
  * Hosts the xterm.js page (terminalHtml.generated.ts) and speaks its bridge
@@ -96,6 +121,8 @@ export const TerminalWebView = forwardRef<
 		onControl,
 		onSelectChange,
 		onCopied,
+		onTap,
+		onScrollChange,
 	},
 	ref,
 ) {
@@ -110,6 +137,13 @@ export const TerminalWebView = forwardRef<
 	onSelectChangeRef.current = onSelectChange;
 	const onCopiedRef = useRef(onCopied);
 	onCopiedRef.current = onCopied;
+	const onTapRef = useRef(onTap);
+	onTapRef.current = onTap;
+	const onScrollChangeRef = useRef(onScrollChange);
+	onScrollChangeRef.current = onScrollChange;
+	const openLink = useOpenLink();
+	const openLinkRef = useRef(openLink);
+	openLinkRef.current = openLink;
 
 	// Parsing the ~400KB generated module is deferred to first mount instead of
 	// app startup (expo-router requires route modules eagerly).
@@ -131,22 +165,24 @@ export const TerminalWebView = forwardRef<
 	// sandbox's edge token expires, so a redial after a long background must
 	// re-mint rather than reuse the URL that worked last time.
 	const buildDialUrl = useCallback(
-		async (replay: "0" | "1"): Promise<string> => {
-			const token = await getHostAuthToken();
+		async (seq: string): Promise<string> => {
 			const query = [
 				`workspaceId=${encodeURIComponent(workspaceId)}`,
 				"themeType=dark",
-				...(replay === "0" ? ["replay=0"] : []),
-				`token=${encodeURIComponent(token)}`,
+				// The page's position in the PTY stream: an epoch:seq anchor
+				// asks for the bytes it missed, "new" for the ring tail,
+				// "none" to reanchor without overwriting restored content.
+				`seq=${encodeURIComponent(seq)}`,
 			];
 			const path = `/terminal/${encodeURIComponent(terminalId)}`;
 			if (isSandboxHost(host.machineId)) {
 				// A browser can't put a header on a WebSocket upgrade, so the
-				// provider's edge reads its token from the query string here.
+				// sandbox's host-service reads its token from the query string.
 				const access = await ensureSandboxAccess(host.machineId);
-				query.push(`bl_preview_token=${encodeURIComponent(access.token)}`);
+				query.push(`token=${encodeURIComponent(access.token)}`);
 				return `${access.url.replace(/^http/, "ws")}${path}?${query.join("&")}`;
 			}
+			query.push(`token=${encodeURIComponent(await getHostAuthToken())}`);
 			const base = getRelayUrl().replace(/^http/, "ws");
 			const routingKey = buildHostRoutingKey(
 				host.organizationId,
@@ -157,6 +193,36 @@ export const TerminalWebView = forwardRef<
 		[host.machineId, host.organizationId, terminalId, workspaceId],
 	);
 
+	// The host runs the PTY at the smallest box across the clients that are
+	// actually showing the terminal, so this screen has to say when it stops
+	// being one of them — a phone left attached in a pocket would otherwise hold
+	// every desktop pane at phone width. Neither unmount nor socket state can
+	// stand in for it: expo-router keeps a pushed-over screen mounted and its
+	// socket alive, so screen focus and app foreground are both required.
+	const [screenFocused, setScreenFocused] = useState(true);
+	useFocusEffect(
+		useCallback(() => {
+			setScreenFocused(true);
+			return () => setScreenFocused(false);
+		}, []),
+	);
+
+	const [appActive, setAppActive] = useState(
+		() => AppState.currentState === "active",
+	);
+	useEffect(() => {
+		const subscription = AppState.addEventListener("change", (state) => {
+			setAppActive(state === "active");
+			if (state === "active") postToPage({ type: "resume" });
+		});
+		return () => subscription.remove();
+	}, [postToPage]);
+
+	// Seeded from the values above rather than a bare `true`, so the `ready`
+	// handshake reports the truth even if it somehow beats the effect below.
+	// Held in a ref so the handshake doesn't re-run on every change.
+	const visibleRef = useRef(screenFocused && appActive);
+
 	const handleMessage = useCallback(
 		(event: WebViewMessageEvent) => {
 			let message: PageMessage;
@@ -165,9 +231,35 @@ export const TerminalWebView = forwardRef<
 			} catch {
 				return;
 			}
+			if (message.type === "ready") {
+				// The page boots believing it is visible, so a visibility change
+				// that landed before it booted was dropped on the floor — and a
+				// phone that was already backgrounded would then attach declaring
+				// itself visible, holding the PTY at phone width for everyone
+				// else. `ready` precedes the page's first connect, so re-asserting
+				// here lands before it attaches.
+				postToPage({ type: "visible", visible: visibleRef.current });
+				// The page waits for this before dialling, so whatever we hold
+				// for this session is painted first and the attach asks only for
+				// what came after it.
+				postToPage({
+					type: "attach",
+					terminalId,
+					restore: readWarmTerminal(terminalId),
+				});
+				return;
+			}
+			if (message.type === "snapshot") {
+				rememberWarmTerminal(message.terminalId, {
+					data: message.data,
+					epoch: message.epoch,
+					seq: message.seq,
+				});
+				return;
+			}
 			if (message.type === "dial") {
-				const { id, replay } = message;
-				buildDialUrl(replay)
+				const { id, seq } = message;
+				buildDialUrl(seq)
 					.then((url) => postToPage({ type: "dialUrl", id, url }))
 					.catch((error: unknown) =>
 						postToPage({
@@ -181,7 +273,7 @@ export const TerminalWebView = forwardRef<
 			} else if (message.type === "control") {
 				onControlRef.current(message.message);
 			} else if (message.type === "openUrl") {
-				void Linking.openURL(message.url).catch(() => {});
+				openLinkRef.current(message.url);
 			} else if (message.type === "copy") {
 				void Clipboard.setStringAsync(message.text).then(
 					() => onCopiedRef.current?.(),
@@ -193,17 +285,20 @@ export const TerminalWebView = forwardRef<
 					active: message.active,
 					hasSelection: message.hasSelection,
 				});
+			} else if (message.type === "tap") {
+				onTapRef.current?.();
+			} else if (message.type === "scroll") {
+				onScrollChangeRef.current?.(message.atBottom);
 			}
 		},
-		[buildDialUrl, postToPage],
+		[buildDialUrl, postToPage, terminalId],
 	);
 
 	useEffect(() => {
-		const subscription = AppState.addEventListener("change", (state) => {
-			if (state === "active") postToPage({ type: "resume" });
-		});
-		return () => subscription.remove();
-	}, [postToPage]);
+		const visible = screenFocused && appActive;
+		visibleRef.current = visible;
+		postToPage({ type: "visible", visible });
+	}, [screenFocused, appActive, postToPage]);
 
 	// Tab switches swap sessions inside the live page instead of remounting
 	// the WebView — a remount pays the 400KB xterm parse and two cold TLS
@@ -214,7 +309,11 @@ export const TerminalWebView = forwardRef<
 	useEffect(() => {
 		if (mountedTerminalId.current === terminalId) return;
 		mountedTerminalId.current = terminalId;
-		postToPage({ type: "switch" });
+		postToPage({
+			type: "switch",
+			terminalId,
+			restore: readWarmTerminal(terminalId),
+		});
 	}, [terminalId, postToPage]);
 
 	useImperativeHandle(
@@ -224,6 +323,7 @@ export const TerminalWebView = forwardRef<
 			focus: () => postToPage({ type: "focus" }),
 			retry: () => postToPage({ type: "resume" }),
 			copySelection: () => postToPage({ type: "copySelection" }),
+			scrollToBottom: () => postToPage({ type: "scrollToBottom" }),
 		}),
 		[postToPage],
 	);
@@ -231,6 +331,10 @@ export const TerminalWebView = forwardRef<
 	return (
 		<StyledWebView
 			ref={webViewRef}
+			// Scrollback is whatever the agent printed — files, diffs, secrets.
+			// A WebView is opaque to autocapture's tree walk today, so this is
+			// belt and braces, but it is the subtree that must never be read.
+			ph-no-capture
 			// Background must match the page's #0a0a0a so resizes don't flash.
 			className="flex-1 bg-[#0a0a0a]"
 			source={{ html }}

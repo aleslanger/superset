@@ -8,6 +8,7 @@ export const SETTING_ITEM_ID = {
 	ACCOUNT_PROFILE: "account-profile",
 	ACCOUNT_SIGNOUT: "account-signout",
 	ACCOUNT_DELETE: "account-delete",
+	ACCOUNT_LEADERBOARD: "account-leaderboard",
 
 	ORGANIZATION_LOGO: "organization-logo",
 	ORGANIZATION_NAME: "organization-name",
@@ -22,6 +23,7 @@ export const SETTING_ITEM_ID = {
 	TEAMS_LIST: "teams-list",
 
 	APPEARANCE_THEME: "appearance-theme",
+	APPEARANCE_LANGUAGE: "appearance-language",
 	APPEARANCE_MARKDOWN: "appearance-markdown",
 	APPEARANCE_CUSTOM_THEMES: "appearance-custom-themes",
 	APPEARANCE_EDITOR_FONT: "appearance-editor-font",
@@ -29,10 +31,15 @@ export const SETTING_ITEM_ID = {
 
 	RINGTONES_NOTIFICATION: "ringtones-notification",
 
+	USAGE_TOKENS: "usage-tokens",
+	USAGE_RESOURCES: "usage-resources",
+
 	KEYBOARD_SHORTCUTS: "keyboard-shortcuts",
 	BEHAVIOR_CONFIRM_QUIT: "behavior-confirm-quit",
 	BEHAVIOR_FILE_OPEN_MODE: "behavior-file-open-mode",
+	BEHAVIOR_CHANGES_OPEN_TARGET: "behavior-changes-open-target",
 	BEHAVIOR_RESOURCE_MONITOR: "behavior-resource-monitor",
+	USAGE_IN_SIDEBAR: "usage-in-sidebar",
 	BEHAVIOR_OPEN_LINKS_IN_APP: "behavior-open-links-in-app",
 	BEHAVIOR_STAR_GITHUB: "behavior-star-github",
 
@@ -52,15 +59,13 @@ export const SETTING_ITEM_ID = {
 	TERMINAL_SESSIONS: "terminal-sessions",
 	TERMINAL_LINK_BEHAVIOR: "terminal-link-behavior",
 	TERMINAL_BACKGROUND_LIMIT: "terminal-background-limit",
+	TERMINAL_COPY_ON_SELECT: "terminal-copy-on-select",
 
 	LINKS_FILE: "links-file",
 	LINKS_FOLDER: "links-folder",
 	LINKS_URL: "links-url",
 	LINKS_SIDEBAR_FILE: "links-sidebar-file",
 	LINKS_PORT: "links-port",
-
-	MODELS_ANTHROPIC: "models-anthropic",
-	MODELS_OPENAI: "models-openai",
 
 	EXPERIMENTAL_SUPERSET_V2: "experimental-superset-v2",
 	EXPERIMENTAL_V1_MIGRATION: "experimental-v1-migration",
@@ -94,9 +99,13 @@ export const SETTING_ITEM_ID = {
 		"security-expose-host-service-via-relay",
 
 	HOST_MEMBERS: "host-members",
+	ENVIRONMENTS_LIST: "environments-list",
+	AGENT_ACCOUNTS: "agent-accounts",
+	ENVIRONMENTS_SECRETS: "environments-secrets",
 	HOST_INVITE_MEMBER: "host-invite-member",
 	HOST_MEMBER_ROLE: "host-member-role",
 	HOST_WORKTREE_LOCATION: "host-worktree-location",
+	HOST_SERVICE_VERSION: "host-service-version",
 	HOST_DELETE: "host-delete",
 } as const;
 
@@ -145,6 +154,7 @@ export const SETTING_ITEM_VARIANT: Record<SettingItemId, SettingVariant> = {
 	[SETTING_ITEM_ID.ACCOUNT_PROFILE]: "shared",
 	[SETTING_ITEM_ID.ACCOUNT_SIGNOUT]: "shared",
 	[SETTING_ITEM_ID.ACCOUNT_DELETE]: "shared",
+	[SETTING_ITEM_ID.ACCOUNT_LEADERBOARD]: "shared",
 
 	[SETTING_ITEM_ID.ORGANIZATION_LOGO]: "shared",
 	[SETTING_ITEM_ID.ORGANIZATION_NAME]: "shared",
@@ -158,6 +168,7 @@ export const SETTING_ITEM_VARIANT: Record<SettingItemId, SettingVariant> = {
 	[SETTING_ITEM_ID.TEAMS_LIST]: "shared",
 
 	[SETTING_ITEM_ID.APPEARANCE_THEME]: "shared",
+	[SETTING_ITEM_ID.APPEARANCE_LANGUAGE]: "shared",
 	[SETTING_ITEM_ID.APPEARANCE_MARKDOWN]: "shared",
 	[SETTING_ITEM_ID.APPEARANCE_CUSTOM_THEMES]: "shared",
 	[SETTING_ITEM_ID.APPEARANCE_EDITOR_FONT]: "v2",
@@ -165,11 +176,18 @@ export const SETTING_ITEM_VARIANT: Record<SettingItemId, SettingVariant> = {
 
 	[SETTING_ITEM_ID.RINGTONES_NOTIFICATION]: "shared",
 
+	[SETTING_ITEM_ID.USAGE_TOKENS]: "shared",
+	[SETTING_ITEM_ID.USAGE_RESOURCES]: "shared",
+
 	[SETTING_ITEM_ID.KEYBOARD_SHORTCUTS]: "shared",
 
 	[SETTING_ITEM_ID.BEHAVIOR_CONFIRM_QUIT]: "shared",
 	[SETTING_ITEM_ID.BEHAVIOR_FILE_OPEN_MODE]: "v1",
+	// The top-bar Changes control is a v2-only surface.
+	[SETTING_ITEM_ID.BEHAVIOR_CHANGES_OPEN_TARGET]: "v2",
 	[SETTING_ITEM_ID.BEHAVIOR_RESOURCE_MONITOR]: "shared",
+	// The home sidebar (DashboardSidebar) only renders for v2 users.
+	[SETTING_ITEM_ID.USAGE_IN_SIDEBAR]: "v2",
 	[SETTING_ITEM_ID.BEHAVIOR_OPEN_LINKS_IN_APP]: "v1",
 	[SETTING_ITEM_ID.BEHAVIOR_STAR_GITHUB]: "shared",
 
@@ -191,15 +209,13 @@ export const SETTING_ITEM_VARIANT: Record<SettingItemId, SettingVariant> = {
 	[SETTING_ITEM_ID.TERMINAL_SESSIONS]: "shared",
 	[SETTING_ITEM_ID.TERMINAL_LINK_BEHAVIOR]: "v1",
 	[SETTING_ITEM_ID.TERMINAL_BACKGROUND_LIMIT]: "v2",
+	[SETTING_ITEM_ID.TERMINAL_COPY_ON_SELECT]: "v2",
 
 	[SETTING_ITEM_ID.LINKS_FILE]: "v2",
 	[SETTING_ITEM_ID.LINKS_FOLDER]: "v2",
 	[SETTING_ITEM_ID.LINKS_URL]: "v2",
 	[SETTING_ITEM_ID.LINKS_SIDEBAR_FILE]: "v2",
 	[SETTING_ITEM_ID.LINKS_PORT]: "v2",
-
-	[SETTING_ITEM_ID.MODELS_ANTHROPIC]: "shared",
-	[SETTING_ITEM_ID.MODELS_OPENAI]: "shared",
 
 	[SETTING_ITEM_ID.EXPERIMENTAL_SUPERSET_V2]: "shared",
 	[SETTING_ITEM_ID.EXPERIMENTAL_V1_MIGRATION]: "v2",
@@ -232,9 +248,13 @@ export const SETTING_ITEM_VARIANT: Record<SettingItemId, SettingVariant> = {
 	[SETTING_ITEM_ID.SECURITY_EXPOSE_HOST_SERVICE_VIA_RELAY]: "shared",
 
 	[SETTING_ITEM_ID.HOST_MEMBERS]: "shared",
+	[SETTING_ITEM_ID.ENVIRONMENTS_LIST]: "v2",
+	[SETTING_ITEM_ID.AGENT_ACCOUNTS]: "v2",
+	[SETTING_ITEM_ID.ENVIRONMENTS_SECRETS]: "v2",
 	[SETTING_ITEM_ID.HOST_INVITE_MEMBER]: "shared",
 	[SETTING_ITEM_ID.HOST_MEMBER_ROLE]: "shared",
 	[SETTING_ITEM_ID.HOST_WORKTREE_LOCATION]: "v2",
+	[SETTING_ITEM_ID.HOST_SERVICE_VERSION]: "v2",
 	[SETTING_ITEM_ID.HOST_DELETE]: "shared",
 };
 
@@ -304,7 +324,7 @@ const INTEGRATION_SEARCH_ITEMS: SettingsItem[] = INTEGRATIONS.map(
 		id: integrationSettingItemId(integration.provider),
 		section: "integrations",
 		title: integration.label,
-		description: integration.description,
+		description: integration.description(),
 		keywords: [
 			"integrations",
 			integration.label.toLowerCase(),
@@ -360,6 +380,24 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"deactivate",
 			"gdpr",
 			"erase",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.ACCOUNT_LEADERBOARD,
+		section: "account",
+		title: "Leaderboard",
+		description: "Publish your agent usage to the public leaderboard",
+		keywords: [
+			"leaderboard",
+			"rank",
+			"ranking",
+			"public",
+			"share",
+			"usage",
+			"tokens",
+			"stats",
+			"opt in",
+			"opt out",
 		],
 	},
 	{
@@ -508,6 +546,21 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 		],
 	},
 	{
+		id: SETTING_ITEM_ID.APPEARANCE_LANGUAGE,
+		section: "appearance",
+		title: "Language",
+		description: "App display language",
+		keywords: [
+			"appearance",
+			"language",
+			"locale",
+			"translation",
+			"i18n",
+			"english",
+			"international",
+		],
+	},
+	{
 		id: SETTING_ITEM_ID.APPEARANCE_THEME,
 		section: "appearance",
 		title: "Theme",
@@ -633,6 +686,44 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 		],
 	},
 	{
+		id: SETTING_ITEM_ID.USAGE_TOKENS,
+		section: "usage",
+		title: "Token usage",
+		description: "Track per-account token usage, quotas, and model spend",
+		keywords: [
+			"usage",
+			"tokens",
+			"token",
+			"cost",
+			"spend",
+			"quota",
+			"limit",
+			"plan",
+			"model",
+			"models",
+			"claude",
+			"account",
+			"history",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.USAGE_RESOURCES,
+		section: "usage",
+		title: "Machine resources",
+		description: "Monitor live CPU and memory usage on this machine",
+		keywords: [
+			"usage",
+			"resources",
+			"cpu",
+			"memory",
+			"ram",
+			"processor",
+			"machine",
+			"performance",
+			"monitor",
+		],
+	},
+	{
 		id: SETTING_ITEM_ID.KEYBOARD_SHORTCUTS,
 		section: "keyboard",
 		title: "Keyboard Shortcuts",
@@ -724,6 +815,24 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 		],
 	},
 	{
+		id: SETTING_ITEM_ID.BEHAVIOR_CHANGES_OPEN_TARGET,
+		section: "behavior",
+		title: "Changes open target",
+		description:
+			"Open the Changes view as a pane in the current tab or as its own tab",
+		keywords: [
+			"changes",
+			"diff",
+			"open",
+			"pane",
+			"tab",
+			"split",
+			"new tab",
+			"viewer",
+			"behavior",
+		],
+	},
+	{
 		id: SETTING_ITEM_ID.BEHAVIOR_RESOURCE_MONITOR,
 		section: "behavior",
 		title: "Resource monitor",
@@ -740,6 +849,23 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"performance",
 			"process",
 			"terminal",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.USAGE_IN_SIDEBAR,
+		section: "usage",
+		title: "Show usage tab on sidebar",
+		description: "Show a Usage button in the home sidebar, under Pull requests",
+		keywords: [
+			"sidebar",
+			"rail",
+			"button",
+			"shortcut",
+			"nav",
+			"home",
+			"gauge",
+			"pull requests",
+			"usage",
 		],
 	},
 	{
@@ -867,6 +993,15 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"moonshot",
 			"grok",
 			"xai",
+			"hermes",
+			"nous",
+			"fx",
+			"vercel",
+			"antigravity",
+			"agy",
+			"google",
+			"kiro",
+			"aws",
 		],
 	},
 	{
@@ -888,12 +1023,14 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 	{
 		id: SETTING_ITEM_ID.TERMINAL_PRESETS,
 		section: "terminal",
-		title: "Terminal Presets",
-		description: "Manage your terminal presets",
+		title: "Terminal Scripts",
+		description: "Manage reusable commands that launch in terminals",
 		keywords: [
 			"terminal",
 			"preset",
 			"presets",
+			"scripts",
+			"terminal scripts",
 			"commands",
 			"agent",
 			"launch",
@@ -908,7 +1045,7 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 		id: SETTING_ITEM_ID.TERMINAL_QUICK_ADD,
 		section: "terminal",
 		title: "Quick Add Templates",
-		description: "Pre-configured terminal presets",
+		description: "Pre-configured terminal scripts",
 		keywords: [
 			"terminal",
 			"quick",
@@ -928,6 +1065,15 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"moonshot",
 			"grok",
 			"xai",
+			"hermes",
+			"nous",
+			"fx",
+			"vercel",
+			"antigravity",
+			"agy",
+			"google",
+			"kiro",
+			"aws",
 		],
 	},
 	{
@@ -970,6 +1116,21 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"performance",
 			"ram",
 			"scrollback",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.TERMINAL_COPY_ON_SELECT,
+		section: "terminal",
+		title: "Copy on select",
+		description: "Copy selected terminal text to the clipboard right away",
+		keywords: [
+			"terminal",
+			"copy",
+			"select",
+			"selection",
+			"clipboard",
+			"ghostty",
+			"iterm",
 		],
 	},
 	{
@@ -1117,44 +1278,6 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"external",
 			"open",
 			"behavior",
-		],
-	},
-	{
-		id: SETTING_ITEM_ID.MODELS_ANTHROPIC,
-		section: "models",
-		title: "Anthropic Model Auth",
-		description: "Connect Anthropic for workspace naming and small model tasks",
-		keywords: [
-			"models",
-			"anthropic",
-			"claude",
-			"oauth",
-			"api key",
-			"auth",
-			"workspace naming",
-			"auto name",
-			"ai",
-			"autocomplete",
-			"auto complete",
-		],
-	},
-	{
-		id: SETTING_ITEM_ID.MODELS_OPENAI,
-		section: "models",
-		title: "OpenAI Model Auth",
-		description: "Connect OpenAI for workspace naming and other model tasks",
-		keywords: [
-			"models",
-			"openai",
-			"gpt",
-			"oauth",
-			"api key",
-			"auth",
-			"workspace naming",
-			"auto name",
-			"ai",
-			"autocomplete",
-			"auto complete",
 		],
 	},
 	{
@@ -1334,8 +1457,8 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 	{
 		id: SETTING_ITEM_ID.PROJECT_SCRIPTS,
 		section: "project",
-		title: "Scripts",
-		description: "Setup, teardown, and run scripts for workspaces",
+		title: "Project Lifecycle Scripts",
+		description: "Setup, teardown, and run lifecycle scripts for workspaces",
 		keywords: [
 			"project",
 			"scripts",
@@ -1551,14 +1674,18 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 	{
 		id: SETTING_ITEM_ID.SECURITY_EXPOSE_HOST_SERVICE_VIA_RELAY,
 		section: "security",
-		title: "Allow remote workspaces to access this device via relay",
+		title: "Allow remote access to this device via relay",
 		description:
-			"Controls whether remote workspaces can reach your local host service through the Superset relay",
+			"Controls whether other devices can reach your local host service through the Superset relay",
 		keywords: [
 			"security",
 			"relay",
 			"remote",
+			"remote access",
 			"workspace",
+			// The section was called Remote Workspaces until the rename; keep the
+			// old name searchable for anyone who still reaches for it.
+			"workspaces",
 			"expose",
 			"lockdown",
 			"network",
@@ -1566,6 +1693,55 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"host service",
 			"tunnel",
 			"attack surface",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.AGENT_ACCOUNTS,
+		section: "agentAccounts",
+		title: "Agents",
+		description: "Sign-ins cloud agents run with",
+		keywords: [
+			"claude",
+			"codex",
+			"subscription",
+			"api key",
+			"oauth",
+			"sign in",
+			"token",
+			"account",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.ENVIRONMENTS_LIST,
+		section: "environments",
+		title: "Environments",
+		description: "Starting points a cloud workspace boots from",
+		keywords: [
+			"environment",
+			"environments",
+			"sandbox",
+			"cloud",
+			"image",
+			"fork",
+			"base",
+			"template",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.ENVIRONMENTS_SECRETS,
+		section: "environments",
+		title: "Environment variables",
+		description: "Variables set on every sandbox started from an environment",
+		keywords: [
+			"environment",
+			"variable",
+			"variables",
+			"secret",
+			"secrets",
+			"env",
+			"dotenv",
+			"key",
+			"credential",
 		],
 	},
 	{
@@ -1601,6 +1777,26 @@ export const SETTINGS_ITEMS: SettingsItem[] = [
 			"folder",
 			"storage",
 			"default",
+		],
+	},
+	{
+		id: SETTING_ITEM_ID.HOST_SERVICE_VERSION,
+		section: "hosts",
+		title: "Host service",
+		description:
+			"The host service version running on a host, and update it when it is behind this app",
+		keywords: [
+			"host",
+			"hosts",
+			"version",
+			"update",
+			"upgrade",
+			"outdated",
+			"behind",
+			"restart",
+			"host service",
+			"machine",
+			"device",
 		],
 	},
 	{

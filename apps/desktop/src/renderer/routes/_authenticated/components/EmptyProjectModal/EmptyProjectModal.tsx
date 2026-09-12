@@ -1,3 +1,6 @@
+import { msg } from "@lingui/core/macro";
+import { useLingui as useTranslation } from "@lingui/react";
+import { errorMessage, rawErrorMessage } from "@superset/i18n/errors";
 import { Button } from "@superset/ui/button";
 import {
 	Dialog,
@@ -35,6 +38,8 @@ export function EmptyProjectModal({
 	onSuccess,
 	onError,
 }: EmptyProjectModalProps) {
+	const { _: translate } = useTranslation();
+
 	const isV2CloudEnabled = useIsV2CloudEnabled();
 	const hostService = useLocalHostService();
 	const finalizeSetup = useFinalizeProjectSetup();
@@ -72,7 +77,7 @@ export function EmptyProjectModal({
 				setParentDir(result.path);
 			}
 		} catch (err) {
-			toast.error(err instanceof Error ? err.message : String(err));
+			toast.error(errorMessage(err));
 		}
 	};
 
@@ -106,7 +111,7 @@ export function EmptyProjectModal({
 			const activeHostUrl = await hostService.waitForHostReady();
 			if (!activeHostUrl) {
 				showHostServiceUnavailableToast(hostService, {
-					action: "create the project",
+					action: "createProject",
 				});
 				return;
 			}
@@ -121,12 +126,12 @@ export function EmptyProjectModal({
 			reset();
 			onOpenChange(false);
 		} catch (err) {
-			const raw = err instanceof Error ? err.message : String(err);
+			const raw = rawErrorMessage(err);
 			const isLeakedSql = raw.startsWith("Failed query:");
 			if (isLeakedSql) console.error("[EmptyProjectModal] create failed", err);
 			const message = isLeakedSql
 				? "Could not create project. Please try a different name or check the logs."
-				: raw;
+				: errorMessage(err);
 			if (onError) {
 				onError(message);
 			} else {
@@ -186,7 +191,7 @@ export function EmptyProjectModal({
 								onClick={handleBrowse}
 								disabled={working || selectDirectory.isPending}
 								className="shrink-0"
-								aria-label="Browse for directory"
+								aria-label={translate(msg({ message: "Browse for directory" }))}
 							>
 								<LuFolderOpen className="size-4" />
 							</Button>

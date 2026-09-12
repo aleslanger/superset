@@ -21,6 +21,7 @@ import {
 	ensureClaudeManagedHooksAt,
 	ensureCodexManagedHooksAt,
 } from "./agent-wrappers-claude-codex-opencode";
+import { resolveDisabledSkillIds } from "./disabled-skills";
 import { provisionManagedClaudePluginAt } from "./managed-skills";
 import {
 	linkSharedDir,
@@ -233,7 +234,12 @@ export async function provisionClaudeProfile(
 	if (surfaces["skills/"] === "user-owned") {
 		// The profile brought its own skills dir, so it isn't sharing ours —
 		// the bundled Superset plugin has to be written into it directly.
-		await provisionManagedClaudePluginAt(target);
+		// No settings row here (this can run from a headless host), so resolve
+		// through the shared mirror/env — the same source the default account
+		// path converges on.
+		await provisionManagedClaudePluginAt(target, {
+			disabledSkills: resolveDisabledSkillIds(),
+		});
 		surfaces["skills/superset"] = "synced";
 	}
 
@@ -257,12 +263,42 @@ const CODEX_SHARED_DIRS = ["prompts"] as const;
  */
 const CODEX_SHARED_FILES = ["config.toml", "AGENTS.md"] as const;
 
+/**
+ * The Codex home the CLI uses with no Superset involvement.
+ *
+ * `CODEX_HOME` is honoured only when the user set it themselves. Superset
+ * injects that same variable into every terminal and agent launch from the
+ * Usage tab's account pointer, and any process started from such a terminal
+ * inherits it — a host-service restarted from a Superset terminal included.
+ * Trusting it there is circular: the selected profile would masquerade as the
+ * system default, so provisioning would share config *out of* the profile and
+ * `discoverCodexHomes` would label it `selection: null`. The
+ * `SUPERSET_DEFAULT_CODEX_HOME` twin exists precisely to mark our own
+ * injection. `SUPERSET_AMBIENT_CODEX_HOME` preserves the actual default when
+ * that default was itself a custom CODEX_HOME, so a nested host-service can
+ * distinguish the selected profile from the user's real home.
+ */
+export function resolveAmbientCodexHome(
+	homeDir: string = os.homedir(),
+): string {
+	const fromEnv = process.env.CODEX_HOME?.trim();
+	const supersetInjected = process.env.SUPERSET_DEFAULT_CODEX_HOME?.trim();
+	const preservedAmbient = process.env.SUPERSET_AMBIENT_CODEX_HOME?.trim();
+	if (
+		fromEnv &&
+		(!supersetInjected || canonical(fromEnv) !== canonical(supersetInjected))
+	) {
+		return path.resolve(fromEnv);
+	}
+	if (preservedAmbient) return path.resolve(preservedAmbient);
+	return path.join(homeDir, ".codex");
+}
+
 function defaultCodexHome(homeDir: string, homeDirOverridden: boolean): string {
 	// An overridden homeDir (tests) must win over the ambient CODEX_HOME, or
 	// the provision would share from the real machine's Codex home.
 	if (homeDirOverridden) return path.join(homeDir, ".codex");
-	const fromEnv = process.env.CODEX_HOME?.trim();
-	return fromEnv ? path.resolve(fromEnv) : path.join(homeDir, ".codex");
+	return resolveAmbientCodexHome(homeDir);
 }
 
 /** Brings one Codex home up to date with the default one. */

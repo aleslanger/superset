@@ -5,12 +5,14 @@ import {
 	automationPromptVersions,
 	automations,
 	automationTriggers,
+	members,
+	organizations,
 	type ScheduleTriggerConfig,
 	type TriggerConfig,
 } from "@superset/db/schema";
 import { nextOccurrenceAfter } from "@superset/shared/rrule";
-import { TRPCError } from "@trpc/server";
 import { and, eq, inArray, sql } from "drizzle-orm";
+import { userError } from "../../i18n-error";
 
 const PROMPT_VERSION_BUCKET_SECONDS = 600;
 
@@ -254,10 +256,14 @@ export function summarizeSchedules(triggers: TriggerRow[]): ScheduleSummary {
 	};
 }
 
-/** Schedule summaries for many automations, keyed by automation id. */
+/**
+ * Schedule summaries for many automations, keyed by automation id. Fetches
+ * every trigger kind so `triggerCount` can tell an event-only automation
+ * apart from one with no triggers at all (untitled automations start empty).
+ */
 export async function scheduleSummariesFor(
 	automationIds: string[],
-): Promise<Map<string, ScheduleSummary>> {
+): Promise<Map<string, ScheduleSummary & { triggerCount: number }>> {
 	if (automationIds.length === 0) return new Map();
 
 	const rows = await db
@@ -268,12 +274,7 @@ export async function scheduleSummariesFor(
 			nextRunAt: automationTriggers.nextRunAt,
 		})
 		.from(automationTriggers)
-		.where(
-			and(
-				inArray(automationTriggers.automationId, automationIds),
-				eq(automationTriggers.kind, "schedule"),
-			),
-		);
+		.where(inArray(automationTriggers.automationId, automationIds));
 
 	const byAutomation = new Map<string, TriggerRow[]>();
 	for (const row of rows) {
@@ -283,10 +284,13 @@ export async function scheduleSummariesFor(
 	}
 
 	return new Map(
-		automationIds.map((id) => [
-			id,
-			summarizeSchedules(byAutomation.get(id) ?? []),
-		]),
+		automationIds.map((id) => {
+			const triggers = byAutomation.get(id) ?? [];
+			return [
+				id,
+				{ ...summarizeSchedules(triggers), triggerCount: triggers.length },
+			];
+		}),
 	);
 }
 
@@ -304,10 +308,61 @@ export const automationBaseColumns = {
 	targetHostId: automations.targetHostId,
 	v2ProjectId: automations.v2ProjectId,
 	v2WorkspaceId: automations.v2WorkspaceId,
+	tags: automations.tags,
+	continueAgentSession: automations.continueAgentSession,
 	enabled: automations.enabled,
 	createdAt: automations.createdAt,
 	updatedAt: automations.updatedAt,
 };
+
+/**
+ * The miss for an org-scoped automation read. An automation the caller can
+ * reach from another organization is a wrong-active-org, not a missing row —
+ * deep links land people here — so name that organization instead of a dead
+ * end. The members join is what keeps it from leaking: it can only ever
+ * resolve an organization the caller already belongs to. Mirrors pageNotFound
+ * in ../page/page.ts.
+ */
+export async function automationNotFound(
+	id: string,
+	userId: string,
+): Promise<Error> {
+	const [elsewhere] = await db
+		.select({
+			organizationId: organizations.id,
+			organizationName: organizations.name,
+		})
+		.from(automations)
+		.innerJoin(
+			members,
+			and(
+				eq(members.organizationId, automations.organizationId),
+				eq(members.userId, userId),
+			),
+		)
+		.innerJoin(organizations, eq(organizations.id, automations.organizationId))
+		.where(eq(automations.id, id))
+		.limit(1);
+
+	if (!elsewhere) {
+		return userError({
+			code: "NOT_FOUND",
+			message: "Automation not found",
+			i18nKey: "serverError.automation.automationNotFound",
+		});
+	}
+	return userError({
+		code: "FORBIDDEN",
+		message: `This automation belongs to ${elsewhere.organizationName}. Switch to that organization to open it.`,
+		i18nKey: "serverError.automation.automationInAnotherOrganization",
+		// organizationId rides along unused by the message so the client can
+		// offer a one-click switch rather than only naming the organization.
+		params: {
+			organizationName: elsewhere.organizationName,
+			organizationId: elsewhere.organizationId,
+		},
+	});
+}
 
 export async function getAutomationForUser(
 	userId: string,
@@ -326,12 +381,16 @@ export async function getAutomationForUser(
 		.limit(1);
 
 	if (!automation || automation.ownerUserId !== userId) {
-		throw new TRPCError({
+		throw userError({
 			code: "NOT_FOUND",
 			message: "Automation not found",
+			i18nKey: "serverError.automation.automationNotFound",
 		});
 	}
 
 	const summaries = await scheduleSummariesFor([automation.id]);
-	return { ...automation, ...(summaries.get(automation.id) ?? NO_SCHEDULE) };
+	return {
+		...automation,
+		...(summaries.get(automation.id) ?? { ...NO_SCHEDULE, triggerCount: 0 }),
+	};
 }

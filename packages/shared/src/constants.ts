@@ -67,6 +67,7 @@ export const THEME_STORAGE_KEY = "superset-theme";
 // Download URLs
 export const DOWNLOAD_URL_MAC_ARM64 = `${COMPANY.GITHUB_URL}/releases/latest/download/Superset-arm64.dmg`;
 export const DOWNLOAD_URL_MAC_X64 = `${COMPANY.GITHUB_URL}/releases/latest/download/Superset-x64.dmg`;
+export const DOWNLOAD_URL_LINUX_X64 = `${COMPANY.GITHUB_URL}/releases/latest/download/Superset-x86_64.AppImage`;
 
 // Auth token configuration
 export const TOKEN_CONFIG = {
@@ -108,25 +109,12 @@ export const V2_NEW_USER_V1_EXPERIMENT_START = "2026-06-08T06:59:00.000Z";
 export const V2_NEW_USER_V2_DEFAULT_START = "2026-07-09T17:00:00.000Z";
 
 export const FEATURE_FLAGS = {
-	/** Gates access to experimental Electric SQL tasks feature. */
-	ELECTRIC_TASKS_ACCESS: "electric-tasks-access",
 	/** Gates access to the experimental mobile-first agents UI on web. */
 	WEB_AGENTS_UI_ACCESS: "web-agents-ui-access",
-	/** Gates access to GitHub integration (currently buggy, internal only). */
-	GITHUB_INTEGRATION_ACCESS: "github-integration-access",
 	/** Gates access to Cloud features (environment variables, sandboxes). */
 	CLOUD_ACCESS: "cloud-access",
 	/** When enabled, blocks remote agent execution on the desktop (e.g., for enterprise orgs). */
 	DISABLE_REMOTE_AGENT: "disable-remote-agent",
-	/**
-	 * Per-user override for the relay base URL. Payload shape:
-	 * `{ "url": "https://..." }`. When set, both the host-service tunnel and
-	 * the desktop renderer's client-side WS opens route through this URL
-	 * instead of `env.RELAY_URL`. Lets us A/B-test alternative relay
-	 * implementations (e.g. Cloudflare Durable Objects) without changing
-	 * defaults for other users.
-	 */
-	RELAY_URL_OVERRIDE: "relay-url-override",
 	/**
 	 * Paces the v1→v2 auto-migration rollout (percentage ramp + high-profile
 	 * org exclusions). Gates only NEW migrations on the v1 surface — post-flip
@@ -151,32 +139,22 @@ export const FEATURE_FLAGS = {
 	 * offered. Off, unloaded, offline, or a payload that isn't an array all
 	 * mean Scheduled only — the event providers exist on main ahead of their
 	 * credentials being provisioned, and each is exposed by adding its kind.
+	 *
+	 * The same payload decides which integrations the settings and web
+	 * integrations pages offer: one that only feeds automations is shown when
+	 * one of its kinds is enabled (`offeredIntegrations` in
+	 * `@superset/shared/integrations`), so a provider is connectable exactly
+	 * when its triggers are.
 	 */
 	AUTOMATION_EVENT_TRIGGERS: "automation-event-triggers",
-	/**
-	 * Experiment flag (control/test): renders the new-workspace surface as a
-	 * full-screen view with sample prompts instead of the dense modal.
-	 * Eligibility (new accounts only) is a release condition on the flag —
-	 * `created_at` person property, sent with flag requests at identify time —
-	 * and the flag is only evaluated when the surface opens, so
-	 * `$feature_flag_called` exposure matches the experiment population.
-	 */
-	NEW_WORKSPACE_SCREEN: "new-workspace-screen",
-	/**
-	 * Boolean override that forces the new-workspace screen (test-arm UI)
-	 * without evaluating the experiment flag — no exposure event, so team
-	 * members and dev accounts can use the screen without contaminating the
-	 * experiment. Checked before eligibility and before the experiment flag.
-	 */
-	NEW_WORKSPACE_SCREEN_OVERRIDE: "new-workspace-screen-override",
 	/**
 	 * Three-arm experiment flag nested inside the shipped new-workspace screen,
 	 * testing form factor only: `control` keeps the inline sample-prompt rows,
 	 * `cards2` shows two cards above the composer, `cards4` shows four in a 2x2
 	 * grid. Every arm slices a nested prefix of one fixed prompt pool and shares
 	 * the same selection rule, so content is identical and only layout and count
-	 * vary. Evaluated when the screen opens, like NEW_WORKSPACE_SCREEN, so
-	 * exposure matches the population that sees it.
+	 * vary. Evaluated when the screen opens, so exposure matches the population
+	 * that sees it.
 	 *
 	 * Anything other than `cards2`/`cards4` renders control — which is why the
 	 * flag must not go live before a build carrying those arms ships, or older
@@ -192,7 +170,7 @@ export const FEATURE_FLAGS = {
 	 * Boolean override that forces the `cards2` arm without evaluating the
 	 * experiment flag — no exposure event, so team and dev accounts can look at
 	 * the cards without entering the analysis. Checked before the experiment
-	 * flag, same as NEW_WORKSPACE_SCREEN_OVERRIDE.
+	 * flag.
 	 */
 	NEW_WORKSPACE_PROMPT_CARDS_OVERRIDE: "new-workspace-prompt-cards-override",
 	/**
@@ -202,11 +180,20 @@ export const FEATURE_FLAGS = {
 	 */
 	CHAT_V3: "chat-v3",
 	/**
-	 * Shows the cloud-workspace option in the create picker. The API gates
-	 * these to @superset.sh accounts independently, so the flag controls
-	 * visibility rather than access.
+	 * Who may use cloud sandboxes: shows the option in the create picker, and
+	 * gates the cloud procedures server-side (`assertCloudAccess`). The release
+	 * conditions are the allowlist, so access changes without a deploy.
 	 */
 	CLOUD_WORKSPACES: "cloud-workspaces",
+	/**
+	 * Shows the Plugins page in the v2 dashboard sidebar. Audience is a
+	 * release condition on the flag (email contains @superset.sh, plus an
+	 * override for the local dev account, which is not on that domain) so
+	 * widening the rollout never needs a release. Everything the page does is
+	 * desktop-local; the flag controls visibility, not capability.
+	 */
+	PLUGINS: "plugins",
+	PAGES: "pages",
 } as const;
 
 /**
@@ -222,7 +209,6 @@ export const LAUNCHED_TRIGGER_KINDS = [
 	"linear",
 	"sentry",
 	"notion",
-	"circleback",
 	"microsoft_teams",
 	"google_calendar",
 	"gmail",
@@ -253,6 +239,22 @@ export const SANDBOX_WORKSPACE_PATH = "/workspace";
  * a pre-migrated template alongside it.
  */
 export const SANDBOX_HOST_DB_PATH = "/data/host.db";
+
+export const SANDBOX_IMAGE_NAME = "superset-hostsvc";
+
+export const SHARED_ENVIRONMENT_ORGANIZATION_ID =
+	"00000000-0000-0000-0000-000000000000";
+
+export const SHARED_ENVIRONMENT_NAME = "Default";
+
+/**
+ * Every cloud workspace clones this. Environments cannot carry repositories yet,
+ * so there is nothing per-workspace to resolve and no project to pick.
+ */
+export const CLOUD_WORKSPACE_REPO = {
+	owner: "superset-sh",
+	name: "superset",
+} as const;
 
 // Terminal identity presented to shell programs via TERM_PROGRAM. kitty:
 // agent TUIs (claude-code especially) tune wheel-scroll compensation per

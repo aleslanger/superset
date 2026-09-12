@@ -1,4 +1,5 @@
 import { zodResolver } from "@hookform/resolvers/zod";
+import { Trans, useLingui } from "@lingui/react/macro";
 import { Button } from "@superset/ui/button";
 import { Card, CardContent, CardHeader } from "@superset/ui/card";
 import {
@@ -20,6 +21,7 @@ import { Redirect } from "renderer/components/Redirect";
 import { useSignOut } from "renderer/hooks/useSignOut";
 import { apiTrpcClient } from "renderer/lib/api-trpc-client";
 import { authClient } from "renderer/lib/auth-client";
+import { electronTrpcClient } from "renderer/lib/trpc-client";
 import { z } from "zod";
 
 export const Route = createFileRoute("/create-organization/")({
@@ -45,6 +47,7 @@ const formSchema = z.object({
 type FormValues = z.infer<typeof formSchema>;
 
 export function CreateOrganization() {
+	const { t } = useLingui();
 	const { data: session } = authClient.useSession();
 	const isSignedIn = !!session?.user;
 	const activeOrganizationId = session?.session?.activeOrganizationId;
@@ -109,21 +112,21 @@ export function CreateOrganization() {
 		if (isCheckingSlug) {
 			return (
 				<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">
-					Checking...
+					<Trans>Checking...</Trans>
 				</span>
 			);
 		}
 		if (slugAvailable === true) {
 			return (
 				<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-green-600">
-					Available
+					<Trans>Available</Trans>
 				</span>
 			);
 		}
 		if (slugAvailable === false) {
 			return (
 				<span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-destructive">
-					Taken
+					<Trans>Taken</Trans>
 				</span>
 			);
 		}
@@ -141,14 +144,27 @@ export function CreateOrganization() {
 			await authClient.organization.setActive({
 				organizationId: organization.id,
 			});
+			// This route lives outside the authenticated layout, so navigating
+			// back remounts CollectionsProvider, which seeds from the window
+			// registry first. Without moving the window too, the registry's old
+			// org wins and you are not taken into the org you just created.
+			await electronTrpcClient.window.setActiveOrg.mutate({
+				organizationId: organization.id,
+			});
 
-			toast.success("Organization created successfully!");
+			toast.success(
+				t({
+					message: "Organization created successfully!",
+				}),
+			);
 			navigate({ to: "/" });
 		} catch (error) {
 			toast.error(
 				error instanceof Error
 					? error.message
-					: "Failed to create organization",
+					: t({
+							message: "Failed to create organization",
+						}),
 			);
 		} finally {
 			setIsSubmitting(false);
@@ -165,27 +181,34 @@ export function CreateOrganization() {
 		<div className="relative flex min-h-screen items-center justify-center bg-background p-4">
 			{/* Stops short of the top-right Cancel/Sign Out button. */}
 			<div className="drag absolute left-0 right-32 top-0 h-12" />
-			<div className="absolute top-4 right-4">
+			<div
+				className="absolute top-4"
+				style={{
+					right: "calc(1rem + (100vw - env(titlebar-area-width, 100vw)))",
+				}}
+			>
 				{hasActiveOrganization ? (
 					<Button
 						variant="ghost"
 						onClick={() => navigate({ to: "/" })}
 						type="button"
 					>
-						Cancel
+						<Trans>Cancel</Trans>
 					</Button>
 				) : (
 					<Button variant="ghost" onClick={handleSignOut} type="button">
-						Sign Out
+						<Trans>Sign Out</Trans>
 					</Button>
 				)}
 			</div>
 
 			<Card className="w-full max-w-md">
 				<CardHeader>
-					<h1 className="text-2xl font-bold">Create Organization</h1>
+					<h1 className="text-2xl font-bold">
+						<Trans>Create Organization</Trans>
+					</h1>
 					<p className="text-sm text-muted-foreground">
-						Set up your organization to get started
+						<Trans>Set up your organization to get started</Trans>
 					</p>
 				</CardHeader>
 				<CardContent>
@@ -197,16 +220,20 @@ export function CreateOrganization() {
 								name="name"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>Organization Name</FormLabel>
+										<FormLabel>
+											<Trans>Organization Name</Trans>
+										</FormLabel>
 										<FormControl>
 											<Input
 												{...field}
-												placeholder="Acme Inc."
+												placeholder={t({
+													message: "Acme Inc.",
+												})}
 												disabled={isSubmitting}
 											/>
 										</FormControl>
 										<FormDescription>
-											The name of your organization or team
+											<Trans>The name of your organization or team</Trans>
 										</FormDescription>
 										<FormMessage />
 									</FormItem>
@@ -218,7 +245,9 @@ export function CreateOrganization() {
 								name="slug"
 								render={({ field }) => (
 									<FormItem>
-										<FormLabel>Slug</FormLabel>
+										<FormLabel>
+											<Trans>Slug</Trans>
+										</FormLabel>
 										<FormControl>
 											<div className="relative">
 												<Input
@@ -230,8 +259,10 @@ export function CreateOrganization() {
 											</div>
 										</FormControl>
 										<FormDescription>
-											A unique identifier for your organization (auto-generated
-											from name)
+											<Trans>
+												A unique identifier for your organization
+												(auto-generated from name)
+											</Trans>
 										</FormDescription>
 										<FormMessage />
 									</FormItem>
@@ -245,7 +276,11 @@ export function CreateOrganization() {
 									isSubmitting || isCheckingSlug || slugAvailable === false
 								}
 							>
-								{isSubmitting ? "Creating..." : "Create Organization"}
+								{isSubmitting ? (
+									<Trans>Creating...</Trans>
+								) : (
+									<Trans>Create Organization</Trans>
+								)}
 							</Button>
 						</form>
 					</Form>

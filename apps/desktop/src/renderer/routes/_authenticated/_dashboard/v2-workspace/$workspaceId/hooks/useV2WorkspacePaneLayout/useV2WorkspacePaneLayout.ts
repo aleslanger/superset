@@ -1,10 +1,21 @@
 import { createWorkspaceStore, type WorkspaceState } from "@superset/panes";
+import { FEATURE_FLAGS } from "@superset/shared/constants";
 import { eq } from "@tanstack/db";
 import { useLiveQuery } from "@tanstack/react-db";
+import { useFeatureFlagEnabled } from "posthog-js/react";
 import { useEffect, useMemo, useRef } from "react";
 import { useWorkspace } from "renderer/routes/_authenticated/_dashboard/v2-workspace/providers/WorkspaceProvider";
 import { useCollections } from "renderer/routes/_authenticated/providers/CollectionsProvider";
+import {
+	applyRememberedV2PaneSelection,
+	rememberV2PaneSelection,
+} from "renderer/stores/v2-pane-selection";
 import type { PaneViewerData } from "../../types";
+import { dropUnavailablePanes } from "./utils/dropUnavailablePanes";
+import {
+	getSharedPaneLayoutSnapshot,
+	preserveLocalPaneSelection,
+} from "./utils/preserveLocalPaneSelection";
 
 const EMPTY_STATE: WorkspaceState<PaneViewerData> = {
 	version: 1,
@@ -13,7 +24,7 @@ const EMPTY_STATE: WorkspaceState<PaneViewerData> = {
 };
 
 function getSnapshot(state: WorkspaceState<PaneViewerData>): string {
-	return JSON.stringify(state);
+	return getSharedPaneLayoutSnapshot(state);
 }
 
 export function useV2WorkspacePaneLayout() {
@@ -31,10 +42,14 @@ export function useV2WorkspacePaneLayout() {
 	// paint after every workspace switch, flashing its contents in one
 	// effect-cycle late.
 	const workspaceRuntime = useMemo(() => {
-		const seededLayout =
+		const persistedLayout =
 			(collections.v2WorkspaceLocalState.get(workspaceId)?.paneLayout as
 				| WorkspaceState<PaneViewerData>
 				| undefined) ?? EMPTY_STATE;
+		const seededLayout = applyRememberedV2PaneSelection(
+			workspaceId,
+			persistedLayout,
+		);
 		return {
 			workspaceId,
 			seededSnapshot: getSnapshot(seededLayout),
@@ -61,14 +76,23 @@ export function useV2WorkspacePaneLayout() {
 		);
 	const localWorkspaceState =
 		localWorkspaceRows.find((row) => row.workspaceId === workspaceId) ?? null;
+	const isPagesEnabled = useFeatureFlagEnabled(FEATURE_FLAGS.PAGES);
+	const unavailableKinds = useMemo(
+		() => (isPagesEnabled === false ? ["page"] : []),
+		[isPagesEnabled],
+	);
+
 	const persistedPaneLayout = useMemo(
 		() =>
-			localWorkspaceState?.workspaceId === workspaceId
-				? ((localWorkspaceState.paneLayout as
-						| WorkspaceState<PaneViewerData>
-						| undefined) ?? EMPTY_STATE)
-				: EMPTY_STATE,
-		[localWorkspaceState, workspaceId],
+			dropUnavailablePanes(
+				localWorkspaceState?.workspaceId === workspaceId
+					? ((localWorkspaceState.paneLayout as
+							| WorkspaceState<PaneViewerData>
+							| undefined) ?? EMPTY_STATE)
+					: EMPTY_STATE,
+				unavailableKinds,
+			),
+		[localWorkspaceState, workspaceId, unavailableKinds],
 	);
 
 	useEffect(() => {
@@ -92,7 +116,11 @@ export function useV2WorkspacePaneLayout() {
 		}
 
 		syncStateRef.current.lastSyncedSnapshot = nextSnapshot;
-		store.getState().replaceState(persistedPaneLayout);
+		store
+			.getState()
+			.replaceState((current) =>
+				preserveLocalPaneSelection(current, persistedPaneLayout),
+			);
 	}, [persistedPaneLayout, store, isLayoutReady]);
 
 	useEffect(() => {
@@ -102,6 +130,7 @@ export function useV2WorkspacePaneLayout() {
 				tabs: nextStore.tabs,
 				activeTabId: nextStore.activeTabId,
 			};
+			rememberV2PaneSelection(workspaceId, nextWorkspaceState);
 			const nextSnapshot = getSnapshot(nextWorkspaceState);
 			if (nextSnapshot === syncStateRef.current.lastSyncedSnapshot) {
 				return;

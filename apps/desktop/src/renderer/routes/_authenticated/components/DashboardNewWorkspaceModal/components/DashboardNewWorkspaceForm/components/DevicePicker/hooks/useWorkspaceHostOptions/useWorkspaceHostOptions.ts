@@ -1,15 +1,22 @@
+import { useLingui } from "@lingui/react/macro";
+import {
+	deriveHostVersionState,
+	type HostVersionState,
+} from "@superset/shared/host-version";
 import { useMemo } from "react";
-import { env } from "renderer/env.renderer";
-import { useHostsPresence } from "renderer/hooks/useHostsPresence";
+import { useAppVersion } from "renderer/hooks/host-version/useHostVersionState";
+import { useKnownHosts } from "renderer/hooks/known-hosts/useKnownHosts";
+import { useActiveOrganizationId } from "renderer/hooks/useActiveOrganizationId";
 import { authClient } from "renderer/lib/auth-client";
 import { cloudTrpc } from "renderer/lib/cloud-trpc";
 import { useLocalHostService } from "renderer/routes/_authenticated/providers/LocalHostServiceProvider";
-import { MOCK_ORG_ID } from "shared/constants";
 
 export interface WorkspaceHostOption {
 	id: string;
 	name: string;
 	isOnline: boolean;
+	version: string | null;
+	versionState: HostVersionState;
 }
 
 interface UseWorkspaceHostOptionsResult {
@@ -27,20 +34,18 @@ interface UseWorkspaceHostOptionsResult {
 }
 
 export function useWorkspaceHostOptions(): UseWorkspaceHostOptionsResult {
+	const { t } = useLingui();
 	const { data: session } = authClient.useSession();
 	const { machineId, activeHostUrl } = useLocalHostService();
+	const appVersion = useAppVersion();
 
-	const activeOrganizationId = env.SKIP_ENV_VALIDATION
-		? MOCK_ORG_ID
-		: (session?.session?.activeOrganizationId ?? null);
+	const activeOrganizationId = useActiveOrganizationId();
 	const currentUserId = session?.user?.id ?? null;
 
-	const { data: hostRows = [] } = cloudTrpc.v2Host.list.useQuery(undefined, {
-		refetchInterval: 30_000,
-	});
+	const { hosts: hostRows } = useKnownHosts();
 
 	const { data: hostMemberRows = [] } =
-		cloudTrpc.v2Host.listMembers.useQuery(undefined);
+		cloudTrpc.host.listMembers.useQuery(undefined);
 
 	const accessibleHosts = useMemo(() => {
 		const accessibleHostIds = new Set(
@@ -58,56 +63,42 @@ export function useWorkspaceHostOptions(): UseWorkspaceHostOptionsResult {
 				machineId: host.machineId,
 				name: host.name,
 				isOnline: host.isOnline,
+				version: host.version,
 			}));
 	}, [activeOrganizationId, currentUserId, hostMemberRows, hostRows]);
 
-	const presenceTargets = useMemo(
-		() =>
-			activeOrganizationId
-				? accessibleHosts.map((host) => ({
-						organizationId: activeOrganizationId,
-						machineId: host.machineId,
-					}))
-				: [],
-		[accessibleHosts, activeOrganizationId],
-	);
-	const presence = useHostsPresence(presenceTargets);
-	const hostsWithPresence = useMemo(
-		() =>
-			presence
-				? accessibleHosts.map((host) => ({
-						...host,
-						isOnline: presence.get(host.machineId) ?? host.isOnline,
-					}))
-				: accessibleHosts,
-		[accessibleHosts, presence],
-	);
-
 	const localHost = useMemo(
-		() =>
-			hostsWithPresence.find((host) => host.machineId === machineId) ?? null,
-		[hostsWithPresence, machineId],
+		() => accessibleHosts.find((host) => host.machineId === machineId) ?? null,
+		[accessibleHosts, machineId],
 	);
 
 	const otherHosts = useMemo(
 		() =>
-			hostsWithPresence
+			accessibleHosts
 				.filter((host) => host.machineId !== machineId)
 				.map((host) => ({
 					id: host.machineId,
 					name: host.name,
-					isOnline: host.isOnline ?? false,
+					isOnline: host.isOnline,
+					version: host.version,
+					versionState: deriveHostVersionState(host.version, appVersion),
 				}))
 				.sort((a, b) => a.name.localeCompare(b.name)),
-		[hostsWithPresence, machineId],
+		[accessibleHosts, machineId, appVersion],
 	);
 
 	// Always surface the local device, even if its host row hasn't loaded yet —
 	// the picker is useless without "this device" present.
 	return {
-		currentDeviceName: localHost?.name ?? (machineId ? "This device" : null),
+		currentDeviceName:
+			localHost?.name ??
+			(machineId
+				? t({
+						message: "This device",
+					})
+				: null),
 		localHostId: localHost?.machineId ?? machineId,
-		localHostIsOnline: localHost ? (localHost.isOnline ?? false) : null,
+		localHostIsOnline: localHost ? localHost.isOnline : null,
 		activeHostUrl,
 		otherHosts,
 	};

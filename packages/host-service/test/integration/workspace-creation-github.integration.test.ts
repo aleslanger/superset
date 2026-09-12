@@ -274,6 +274,19 @@ describe("workspaceCreation github procedures with mocked Octokit", () => {
 		});
 	});
 
+	test("searchPullRequests direct lookup matches any selected author", async () => {
+		const result = await host.trpc.workspaceCreation.searchPullRequests.query({
+			projectId,
+			query: "#33",
+			author: "alice, @BOB",
+		});
+		expect(result.pullRequests).toHaveLength(1);
+		const excluded = await host.trpc.workspaceCreation.searchPullRequests.query(
+			{ projectId, query: "#33", author: "alice,carol" },
+		);
+		expect(excluded.pullRequests).toEqual([]);
+	});
+
 	test("searchPullRequests filters a direct lookup by author", async () => {
 		const result = await host.trpc.workspaceCreation.searchPullRequests.query({
 			projectId,
@@ -289,7 +302,7 @@ describe("workspaceCreation github procedures with mocked Octokit", () => {
 		await expect(
 			host.trpc.workspaceCreation.searchPullRequests.query({
 				projectId,
-				author: "octo--cat",
+				author: "alice,octo--cat",
 			}),
 		).rejects.toThrow("Author must be a valid GitHub username");
 		expect(calls).toHaveLength(0);
@@ -407,14 +420,14 @@ describe("workspaceCreation github procedures with mocked Octokit", () => {
 		const result = await host.trpc.workspaceCreation.searchPullRequests.query({
 			projectId,
 			query: "find me",
-			author: "carol",
+			author: "carol,bob",
 			review: "approved",
 		});
 		// Our fake search returns one issue (no `pull_request`), so no PRs.
 		expect(result.pullRequests).toEqual([]);
 		expect(calls[0].method).toBe("search.issuesAndPullRequests");
 		const searchArgs = calls[0].args as { q: string };
-		expect(searchArgs.q).toContain("author:carol");
+		expect(searchArgs.q).toContain("author:carol author:bob");
 		expect(searchArgs.q).toContain("review:approved");
 	});
 });
@@ -774,6 +787,19 @@ describe("gh CLI is first-class when execGh succeeds", () => {
 		expect(ghCalls[0].cwd).toBe(realpathSync(repoDir));
 	});
 
+	test("searchPullRequests direct lookup matches any selected author", async () => {
+		const result = await host.trpc.workspaceCreation.searchPullRequests.query({
+			projectId,
+			query: "#33",
+			author: "alice, @BOB",
+		});
+		expect(result.pullRequests).toHaveLength(1);
+		const excluded = await host.trpc.workspaceCreation.searchPullRequests.query(
+			{ projectId, query: "#33", author: "alice,carol" },
+		);
+		expect(excluded.pullRequests).toEqual([]);
+	});
+
 	test("searchPullRequests filters a gh direct lookup by author", async () => {
 		const result = await host.trpc.workspaceCreation.searchPullRequests.query({
 			projectId,
@@ -841,7 +867,7 @@ describe("gh CLI is first-class when execGh succeeds", () => {
 		const result = await host.trpc.workspaceCreation.searchPullRequests.query({
 			projectId,
 			query: "find me",
-			author: "carol",
+			author: "carol,bob",
 			review: "team-review-requested",
 		});
 		expect(result.pullRequests).toHaveLength(1);
@@ -858,7 +884,7 @@ describe("gh CLI is first-class when execGh succeeds", () => {
 		expect(qArg).toContain("is:pr");
 		expect(qArg).toContain("is:open");
 		expect(qArg).toContain("find me");
-		expect(qArg).toContain("author:carol");
+		expect(qArg).toContain("author:carol author:bob");
 		expect(qArg).toContain("review-requested:@me");
 		expect(qArg).not.toContain("team-review-requested:@me");
 		expect(ghCalls[1].args.slice(0, 2)).toEqual(["api", "graphql"]);
@@ -1414,6 +1440,109 @@ describe("GitHub rate-limit errors map to TOO_MANY_REQUESTS", () => {
 				projectId,
 				query: "anything",
 			}),
+		);
+	});
+});
+
+describe("GitHub rejected-credential errors map to actionable UNAUTHORIZED", () => {
+	let host: TestHost;
+	let repoDir: string;
+	const projectId = randomUUID();
+
+	afterEach(async () => {
+		await host.dispose();
+		rmSync(repoDir, { recursive: true, force: true });
+	});
+
+	const badCredentials = () =>
+		Object.assign(new Error("Bad credentials - https://docs.github.com/rest"), {
+			status: 401,
+		});
+
+	const expectRejection = async (
+		promise: Promise<unknown>,
+	): Promise<{ message: string; data?: { code?: string } }> => {
+		const error = await promise.then(
+			() => null,
+			(err: { message: string; data?: { code?: string } }) => err,
+		);
+		expect(error).not.toBeNull();
+		if (!error) throw new Error("unreachable");
+		return error;
+	};
+
+	test("a 401 from both gh and Octokit names the rejected token source", async () => {
+		// Default test execGh rejects, standing in for a gh CLI that 401s too.
+		host = await createTestHost({
+			githubFactory: async () => ({
+				search: {
+					issuesAndPullRequests: async () => {
+						throw badCredentials();
+					},
+				},
+			}),
+			githubToken: "stale-token",
+			githubTokenSource: "gh-cli",
+		});
+		repoDir = await seedRepoFixture(
+			host,
+			projectId,
+			"https://github.com/octocat/hello.git",
+		);
+		const error = await expectRejection(
+			host.trpc.workspaceCreation.searchPullRequests.query({
+				projectId,
+				query: "anything",
+			}),
+		);
+		expect(error.data?.code).toBe("UNAUTHORIZED");
+		expect(error.message).toBe(
+			"GitHub rejected this machine's gh CLI login (not the Superset integration). Run `gh auth login`, then restart Superset.",
+		);
+	});
+
+	test("a 401 with an unknown token source falls back to generic guidance", async () => {
+		host = await createTestHost({
+			githubFactory: async () => ({
+				search: {
+					issuesAndPullRequests: async () => {
+						throw badCredentials();
+					},
+				},
+			}),
+			githubToken: "stale-token",
+		});
+		repoDir = await seedRepoFixture(
+			host,
+			projectId,
+			"https://github.com/octocat/hello.git",
+		);
+		const error = await expectRejection(
+			host.trpc.workspaceCreation.searchGitHubIssues.query({
+				projectId,
+				query: "anything",
+			}),
+		);
+		expect(error.data?.code).toBe("UNAUTHORIZED");
+		expect(error.message).toContain("gh auth login");
+	});
+
+	test("a missing token reports where the login must live", async () => {
+		host = await createTestHost({ githubToken: null });
+		repoDir = await seedRepoFixture(
+			host,
+			projectId,
+			"https://github.com/octocat/hello.git",
+		);
+		const error = await expectRejection(
+			host.trpc.workspaceCreation.searchPullRequests.query({
+				projectId,
+				query: "anything",
+			}),
+		);
+		expect(error.data?.code).toBe("PRECONDITION_FAILED");
+		expect(error.message).toBe(
+			"No GitHub login on this machine (the Superset integration doesn't cover this). Run `gh auth login`.",
 		);
 	});
 });

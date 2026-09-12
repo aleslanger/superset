@@ -7,6 +7,7 @@ export type SettingsSection =
 	| "teams"
 	| "appearance"
 	| "ringtones"
+	| "usage"
 	| "keyboard"
 	| "behavior"
 	| "browser"
@@ -14,7 +15,6 @@ export type SettingsSection =
 	| "agents"
 	| "terminal"
 	| "links"
-	| "models"
 	| "experimental"
 	| "integrations"
 	| "billing"
@@ -22,7 +22,9 @@ export type SettingsSection =
 	| "permissions"
 	| "security"
 	| "project"
-	| "hosts";
+	| "hosts"
+	| "environments"
+	| "agentAccounts";
 
 interface SettingsState {
 	activeSection: SettingsSection;
