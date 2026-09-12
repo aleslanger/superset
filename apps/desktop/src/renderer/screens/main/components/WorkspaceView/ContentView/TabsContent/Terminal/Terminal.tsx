@@ -431,9 +431,7 @@ export const Terminal = memo(function Terminal({
 		let text: string;
 		if (files.length > 0) {
 			// Native file drop (from Finder, etc.)
-			const paths = files
-				.map((file) => window.webUtils.getPathForFile(file))
-				.filter((p): p is string => !!p);
+			const paths = files.map((file) => window.webUtils.getPathForFile(file));
 			text = shellEscapePaths(paths);
 		} else {
 			// Internal drag (from file tree) - path is in text/plain

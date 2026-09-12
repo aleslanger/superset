@@ -144,10 +144,10 @@ export async function loadReactDevToolsExtension(): Promise<void> {
 	];
 
 	for (const { label, ses } of targets) {
-		if (ses.getExtension(REACT_DEVTOOLS_EXTENSION_ID)) continue;
+		if (ses.extensions.getExtension(REACT_DEVTOOLS_EXTENSION_ID)) continue;
 
 		try {
-			const extension = await ses.loadExtension(extensionPath, {
+			const extension = await ses.extensions.loadExtension(extensionPath, {
 				allowFileAccess: true,
 			});
 			console.log(
@@ -174,7 +174,9 @@ export async function loadWebviewBrowserExtension(): Promise<void> {
 	}
 
 	try {
-		await session.fromPartition(APP_PARTITION).loadExtension(extensionPath);
+		await session
+			.fromPartition(APP_PARTITION)
+			.extensions.loadExtension(extensionPath);
 		console.log("[main] Browser extension loaded");
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);

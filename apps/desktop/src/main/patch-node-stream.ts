@@ -1,21 +1,22 @@
-// Polyfill stream.getDefaultHighWaterMark when missing.
-// This ensures compatibility across Electron/Node versions at startup.
+// Some Electron builds bundle a Node whose stream module predates
+// getDefaultHighWaterMark, which dependencies call at import time. This has to
+// run before any of them load, so it is its own rollup entry.
+type StreamModule = {
+	getDefaultHighWaterMark?: (isObjectMode: boolean) => number;
+};
+
 try {
-	// Use require to get the Node stream module reliably at runtime
-	// eslint-disable-next-line @typescript-eslint/no-var-requires
-	const node_stream = require("node:stream");
-	if (typeof node_stream.getDefaultHighWaterMark !== "function") {
-		(node_stream as any).getDefaultHighWaterMark = (isObjectMode: boolean) =>
+	const stream = require("node:stream") as StreamModule;
+	if (typeof stream.getDefaultHighWaterMark !== "function") {
+		stream.getDefaultHighWaterMark = (isObjectMode) =>
 			isObjectMode ? 16 : 16 * 1024;
-		// eslint-disable-next-line no-console
 		console.log(
 			"[patch-node-stream] polyfilled stream.getDefaultHighWaterMark",
 		);
 	}
 } catch (err) {
-	// eslint-disable-next-line no-console
 	console.error(
 		"[patch-node-stream] failed to apply patch",
-		err && (err as Error).message,
+		err instanceof Error ? err.message : err,
 	);
 }

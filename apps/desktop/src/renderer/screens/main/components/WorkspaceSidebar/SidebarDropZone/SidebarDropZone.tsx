@@ -85,12 +85,14 @@ export function SidebarDropZone({ children, className }: SidebarDropZoneProps) {
 			const firstFile = Array.from(e.dataTransfer.files)[0];
 			if (!firstFile) return;
 
-			let filePath: string | undefined;
+			let filePath: string;
 			try {
 				filePath = window.webUtils.getPathForFile(firstFile);
 			} catch {
-				// getPathForFile threw — fall through to guard below
+				setError("Could not get path from dropped item");
+				return;
 			}
+
 			if (!filePath) {
 				setError("Could not get path from dropped item");
 				return;
